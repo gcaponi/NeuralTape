@@ -1,0 +1,33 @@
+# Neural Tape v2.2 example configuration
+# Runtime LLM settings live in `.env`, not in this YAML file.
+
+pre_load:
+  max_insights: 10
+  max_patterns: 5
+  lookback_days: 7
+  include_etercervo: true
+  include_lex_memory: true
+
+paths:
+  neural_tape_root: "/path/to/NeuralTape"
+  etervelo_wiki: "/path/to/EterCervo"
+  lex_memory: "/path/to/EterCervo/_Lex/memory.md"
+
+v22:
+  transcript_glob: "~/.config/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts/*.jsonl"
+  idle_threshold_min: 10
+  max_age_minutes: 60
+  classifier_max_insights: 7
+  classifier_chunk_chars: 30000
+  scheduler: "systemd-user"
+
+storage:
+  memory_file: "_Lex/memory.md"
+  archive_dir: "neural-tape/tape/archive"
+  state_file: "neural-tape/tape/.state/v22-session-state.json"
+  log_file: "neural-tape/tape/.state/v22-cron.log"
+
+# .env example:
+# LLM_API_KEY=your-key-here
+# LLM_BASE_URL=https://api.deepseek.com
+# LLM_MODEL=deepseek-v4-flash
