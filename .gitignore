@@ -35,3 +35,4 @@ session-context.md
 .env
 config.yaml
 !config.example.yaml
+tape/v3/*
