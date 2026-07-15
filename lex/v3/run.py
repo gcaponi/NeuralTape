@@ -11,6 +11,7 @@ It does NOT touch v2.2 cron. v2.2 keeps running on its own timer regardless.
 Usage:
     python lex/v3/run.py --selfcheck
     NEURAL_TAPE_V3=1 python lex/v3/run.py --status
+    NEURAL_TAPE_V3=1 python lex/v3/run.py --once <session> --project-root <path>
 """
 
 from __future__ import annotations
@@ -20,12 +21,47 @@ import importlib.util
 import logging
 import os
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Protocol
 
 THIS_DIR = Path(__file__).resolve().parent          # lex/v3/
 TAPE_ROOT = THIS_DIR.parent.parent                  # NeuralTape/
 
 log = logging.getLogger("neural-tape-v3")
+
+CLASSIFIED_EVENT = "transcript.classified"
+RUN_ONCE_MAX_CHARS = 30000
+
+
+@dataclass(frozen=True)
+class RunOnceResult:
+    session_id: str
+    project_id: str
+    episodes_written: int
+    skipped: bool
+    focus_path: Path
+    workset_path: Path
+    parsed_chars: int
+    processed_chars: int
+    duration_seconds: float
+
+
+class TranscriptWatcherProtocol(Protocol):
+    def find_all_transcripts(
+        self,
+        max_age_minutes: int,
+    ) -> list[tuple[float, Path]]: ...
+
+
+class ClassifierProtocol(Protocol):
+    def classify_and_persist(
+        self,
+        transcript_text: str,
+        session_id: str,
+        project_id: str,
+    ) -> int: ...
 
 
 def _load_sibling(name: str):
@@ -36,10 +72,213 @@ def _load_sibling(name: str):
 def _load_from_path(mod_name: str, path: Path):
     """Load a Python module from an arbitrary file path using importlib."""
     spec = importlib.util.spec_from_file_location(mod_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load module {mod_name!r} from {path}")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def _load_env_file(env_path: Path) -> None:
+    """Load simple KEY=value entries without overriding the process env."""
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _latest_transcript_window(text: str, *, max_chars: int) -> str:
+    """Return at most max_chars from the newest end of a transcript."""
+    if max_chars <= 0:
+        raise ValueError("max_chars must be greater than zero")
+    return text if len(text) <= max_chars else text[-max_chars:]
+
+
+def resolve_transcript(
+    session_ref: str,
+    *,
+    watcher: TranscriptWatcherProtocol | None = None,
+    max_age_minutes: int = 10080,
+) -> Path:
+    """Resolve an exact session id or a unique id prefix to a transcript."""
+    direct_path = Path(session_ref).expanduser()
+    if direct_path.is_file():
+        return direct_path.resolve()
+
+    if watcher is None:
+        watcher_mod = _load_from_path(
+            "nt_v22.watcher",
+            TAPE_ROOT / "lex" / "v22" / "watcher.py",
+        )
+        watcher = watcher_mod.TranscriptWatcher()
+
+    assert watcher is not None
+    candidates = watcher.find_all_transcripts(max_age_minutes=max_age_minutes)
+    paths = [Path(path) for _, path in candidates]
+    exact = [path for path in paths if path.stem == session_ref]
+    if len(exact) == 1:
+        return exact[0]
+
+    matches = [path for path in paths if path.stem.startswith(session_ref)]
+    if not matches:
+        raise FileNotFoundError(
+            f"no transcript matches session {session_ref!r} in the last "
+            f"{max_age_minutes} minutes"
+        )
+    if len(matches) > 1:
+        choices = ", ".join(path.stem for path in matches[:5])
+        raise ValueError(
+            f"ambiguous session prefix {session_ref!r}; matches: {choices}"
+        )
+    return matches[0]
+
+
+def run_once(
+    transcript_path: Path,
+    project_root: Path,
+    *,
+    tape_root: Path = TAPE_ROOT,
+    config_path: Path | None = None,
+    classifier_factory: Callable[..., ClassifierProtocol] | None = None,
+    max_transcript_chars: int = RUN_ONCE_MAX_CHARS,
+) -> RunOnceResult:
+    """Classify one transcript and refresh project context idempotently."""
+    started_at = time.monotonic()
+    transcript_path = Path(transcript_path).resolve()
+    project_root = Path(project_root).resolve()
+    tape_root = Path(tape_root).resolve()
+    if not transcript_path.is_file():
+        raise FileNotFoundError(f"transcript not found: {transcript_path}")
+    if not project_root.is_dir():
+        raise NotADirectoryError(f"project root not found: {project_root}")
+
+    config_mod = _load_sibling("config")
+    storage_mod = _load_sibling("storage")
+    project_mod = _load_sibling("project")
+    redaction_mod = _load_sibling("redaction")
+    cost_mod = _load_sibling("cost")
+    classifier_mod = _load_sibling("classifier")
+    memory_mod = _load_sibling("memory")
+    events_mod = _load_sibling("events")
+    focus_mod = _load_sibling("focus")
+    workset_mod = _load_sibling("workset")
+    git_mod = _load_from_path("nt_v3.git_adapter", THIS_DIR / "adapters" / "git.py")
+    parser_mod = _load_from_path(
+        "nt_v22.transcript_parser",
+        TAPE_ROOT / "lex" / "v22" / "transcript_parser.py",
+    )
+
+    cfg = config_mod.load(tape_root, config_path=config_path)
+    if not cfg.enabled:
+        raise RuntimeError(
+            "NeuralTape v3 is disabled. Set NEURALTAPE_V3=1 or v3.enabled=true."
+        )
+
+    project = project_mod.ProjectResolver().resolve(project_root)
+    storage = storage_mod.Storage(cfg.storage.db_path)
+    session_id = transcript_path.stem
+    already_classified = storage.has_event(
+        project.project_id,
+        source_type=CLASSIFIED_EVENT,
+        source_ref=session_id,
+    )
+    episodes_written = 0
+    parsed_chars = 0
+    processed_chars = 0
+
+    if not already_classified:
+        transcript_text = parser_mod.TranscriptParser().parse_delta(transcript_path, 0)
+        if not transcript_text.strip():
+            raise ValueError(f"transcript has no classifiable events: {transcript_path}")
+        parsed_chars = len(transcript_text)
+        transcript_text = _latest_transcript_window(
+            transcript_text,
+            max_chars=max_transcript_chars,
+        )
+        processed_chars = len(transcript_text)
+
+        env_path = os.environ.get("NEURAL_TAPE_ENV")
+        if env_path:
+            _load_env_file(Path(env_path).expanduser())
+        _load_env_file(tape_root / ".env")
+
+        redactor = redaction_mod.Redactor(
+            extra_patterns=cfg.redaction.extra_patterns,
+        )
+        policy = cost_mod.CostPolicy(
+            budget=cost_mod.CostBudget(
+                daily_limit_calls=cfg.cost.daily_limit_calls,
+                daily_limit_tokens=cfg.cost.daily_limit_tokens,
+            ),
+            state_dir=cfg.storage.db_path.parent / ".state",
+            fallback_notify_interval_hours=cfg.cost.fallback_notify_interval_hours,
+        )
+        factory = classifier_factory or classifier_mod.ClassifierV3
+        classifier = factory(
+            config=cfg,
+            project=project,
+            storage=storage,
+            redactor=redactor,
+            cost_policy=policy,
+        )
+        episodes_written = classifier.classify_and_persist(
+            transcript_text,
+            session_id,
+            project.project_id,
+        )
+        storage.append_event(
+            project_id=project.project_id,
+            source_type=CLASSIFIED_EVENT,
+            source_ref=session_id,
+            captured_at=time.time(),
+            payload={"episodes_written": episodes_written},
+        )
+
+    memory_mod.MemoryPromoter(storage=storage, config=cfg).tick(
+        project_id=project.project_id,
+    )
+    event_bus = events_mod.EventBus(
+        storage,
+        allowed_sources=set(cfg.events.enabled_sources),
+    )
+    git_adapter = git_mod.GitAdapter(
+        project_root=project.root,
+        event_bus=event_bus,
+        project_id=project.project_id,
+    )
+    output_dir = cfg.storage.db_path.parent / "projects" / project.project_id
+    workset_mod.WorkingSetGenerator(
+        storage=storage,
+        project_root=project.root,
+        project_id=project.project_id,
+        output_dir=output_dir,
+    ).generate()
+    focus_mod.FocusGenerator(
+        storage=storage,
+        git_adapter=git_adapter,
+        project=project,
+        output_dir=output_dir,
+    ).generate()
+
+    return RunOnceResult(
+        session_id=session_id,
+        project_id=project.project_id,
+        episodes_written=episodes_written,
+        skipped=already_classified,
+        focus_path=output_dir / "current-focus.json",
+        workset_path=output_dir / "working-set.json",
+        parsed_chars=parsed_chars,
+        processed_chars=processed_chars,
+        duration_seconds=time.monotonic() - started_at,
+    )
 
 
 def selfcheck() -> int:
@@ -74,7 +313,7 @@ def selfcheck() -> int:
     # 4. Redactor
     redactor = redaction_mod.Redactor(extra_patterns=cfg.redaction.extra_patterns)
     sample = "token=AKIAIOSFODNN7EXAMPLE and password=thisisalongsecret12345"
-    redacted, events = redactor.redact(sample)
+    events = redactor.redact(sample)[1]
     print(f"[4/10] redactor OK - {len(events)} redaction(s) in sample")
 
     # 5. EventBus
@@ -130,11 +369,11 @@ def selfcheck() -> int:
 
     # 10. FocusGenerator + WorkingSetGenerator - instantiation
     focus_dir = cfg.storage.db_path.parent / "focus"
-    focus_gen = focus_mod.FocusGenerator(
+    focus_mod.FocusGenerator(
         storage=storage, git_adapter=git_adapter,
         project=self_proj, output_dir=focus_dir,
     )
-    ws_gen = workset_mod.WorkingSetGenerator(
+    workset_mod.WorkingSetGenerator(
         storage=storage, project_root=self_proj.root,
         project_id=self_proj.project_id, output_dir=focus_dir,
     )
@@ -168,6 +407,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="NeuralTape v3 entry point (Fase 0 + Fase 1)")
     ap.add_argument("--selfcheck", action="store_true", help="smoke test all v3 modules")
     ap.add_argument("--status", action="store_true", help="print current v3 config status")
+    ap.add_argument("--once", metavar="SESSION", help="process one transcript id or unique prefix")
+    ap.add_argument("--project-root", type=Path, help="explicit project root for --once")
+    ap.add_argument("--config", type=Path, help="optional config.yaml path")
+    ap.add_argument("--max-age-minutes", type=int, default=10080)
+    ap.add_argument("--max-transcript-chars", type=int, default=RUN_ONCE_MAX_CHARS)
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -180,6 +424,37 @@ def main() -> int:
         return selfcheck()
     if args.status:
         return status()
+    if args.once:
+        if args.project_root is None:
+            ap.error("--project-root is required with --once")
+        try:
+            transcript = resolve_transcript(
+                args.once,
+                max_age_minutes=args.max_age_minutes,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            log.error("%s", error)
+            return 2
+        try:
+            result = run_once(
+                transcript,
+                args.project_root,
+                config_path=args.config,
+                max_transcript_chars=args.max_transcript_chars,
+            )
+        except Exception as error:
+            log.error("v3 once failed: %s", error, exc_info=args.verbose)
+            return 1
+        state = "skipped" if result.skipped else "classified"
+        print(
+            f"v3 once: {state} session={result.session_id} "
+            f"project={result.project_id} episodes={result.episodes_written} "
+            f"chars={result.processed_chars}/{result.parsed_chars} "
+            f"duration={result.duration_seconds:.2f}s"
+        )
+        print(f"focus:   {result.focus_path}")
+        print(f"workset: {result.workset_path}")
+        return 0
     ap.print_help()
     return 0
 

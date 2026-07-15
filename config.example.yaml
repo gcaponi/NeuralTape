@@ -1,4 +1,4 @@
-# Neural Tape v2.2 example configuration
+# Neural Tape example configuration
 # Runtime LLM settings live in `.env`, not in this YAML file.
 
 pre_load:
@@ -20,6 +20,19 @@ v22:
   classifier_max_insights: 7
   classifier_chunk_chars: 30000
   scheduler: "systemd-user"
+
+v3:
+  enabled: false
+  storage:
+    db_path: "tape/v3/neuraltape.db"
+  cost:
+    daily_limit_calls: 100
+    daily_limit_tokens: 200000
+    fallback_notify_interval_hours: 24
+  events:
+    enabled_sources: ["transcript", "git.commit"]
+  redaction:
+    extra_patterns: []
 
 storage:
   memory_file: "_Lex/memory.md"

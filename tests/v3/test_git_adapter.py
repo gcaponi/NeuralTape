@@ -14,7 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "lex" / "v3"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lex" / "v3"))
 
 # Suppress logging noise during tests
 logging.disable(logging.CRITICAL)
@@ -117,6 +117,7 @@ def test_get_recent_files_with_uncommitted():
     files = adapter.get_recent_files(max_files=10)
     assert "new_file.py" in files
     assert "existing.py" in files
+    assert files.index("new_file.py") < files.index("existing.py")
 
 
 def test_parse_log():

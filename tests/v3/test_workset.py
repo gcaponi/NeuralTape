@@ -74,6 +74,10 @@ def test_workset_generator_in_git_repo():
     assert len(ws.files) >= 1
     assert ws.captured_at > 0
     assert any("app.py" in f["path"] for f in ws.files)
+    assert any(
+        f["path"] == "new.py" and f["reason"] == "git-changed"
+        for f in ws.files
+    )
 
     # File must exist on disk
     out_file = out_dir / "working-set.json"

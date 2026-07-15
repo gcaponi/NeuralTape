@@ -453,4 +453,30 @@ quell'ambiente).
 
 ---
 
+## 9. Activation milestone — 2026-07-15
+
+La v3 dispone ora di un percorso manuale end-to-end, senza sostituire il timer v2.2:
+
+- `lex/v3/run.py --once <session> --project-root <path>` risolve solo ID esatti o
+    prefissi univoci e richiede attribuzione esplicita del progetto.
+- La classificazione e' idempotente tramite marker `transcript.classified` in
+    `event_log`; una seconda run non richiama l'LLM e rigenera solo focus/workset.
+- Errori LLM, budget differito e risposte non JSON non vengono confusi con una
+    classificazione valida a zero insight.
+- Il one-shot usa per default i 30.000 caratteri parsati piu' recenti, mantenendo
+    una singola chiamata LLM anche su transcript lunghi.
+- Prima run reale su NeuralTape: 8 episodi, M1 `23.17s`, rerun idempotente `0.31s`.
+- Working set reale: 9/9 file attivi rilevati dopo l'inclusione degli untracked.
+- Suite v3: 80/80 test verdi; entrypoint senza diagnostica Pylance.
+
+Restano intenzionalmente aperti prima dello switch del timer:
+
+- validazione su 10 sessioni storiche e almeno due progetti;
+- `current-focus` confidence >= 0.5 su un caso ZEUS committato;
+- promotion verificata su 3+ sessioni simili;
+- cattura commit su EventBus;
+- M2 su 10 handoff reali, disponibile solo dopo il renderer di Fase 2.
+
+---
+
 **End of Fase 1 spec.**

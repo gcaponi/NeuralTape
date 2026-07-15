@@ -116,6 +116,12 @@ class WorkingSetGenerator:
             if p and p not in seen:
                 seen.add(p)
                 files.append(FileEntry(path=p, reason="git-changed"))
+        untracked = self._run_git("ls-files", "--others", "--exclude-standard")
+        for line in untracked.splitlines():
+            p = line.strip()
+            if p and p not in seen:
+                seen.add(p)
+                files.append(FileEntry(path=p, reason="git-changed"))
 
     def _add_git_recent_commits(self, files: list[FileEntry], seen: set[str]) -> None:
         raw = self._run_git(

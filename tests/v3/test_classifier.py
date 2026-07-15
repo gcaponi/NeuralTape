@@ -9,7 +9,39 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lex" / "v3"))
 
-from classifier import ClassifierInsight  # type: ignore[import-not-found]
+from classifier import (  # type: ignore[import-not-found]
+    CLASSIFIER_PROMPT,
+    ClassificationError,
+    ClassifierInsight,
+    ClassifierV3,
+)
+
+
+class CleanRedactor:
+    def redact(self, text: str):
+        return text, []
+
+    def summary(self, _events):
+        return "redaction: clean"
+
+
+class OpenCostPolicy:
+    def can_call(self):
+        return True, "ok"
+
+    def record_call(self, _tokens_used: int):
+        return None
+
+
+def _build_classifier() -> ClassifierV3:
+    return ClassifierV3(
+        config=object(),
+        project=object(),
+        storage=object(),
+        redactor=CleanRedactor(),
+        cost_policy=OpenCostPolicy(),
+        api_key="test-key",
+    )
 
 
 def test_classifier_insight_valid():
@@ -104,3 +136,43 @@ def test_redaction_integration():
     # The generic-assignment pattern should catch "token=..." with long value
     assert "[REDACTED:" in redacted
     assert "sk-abc123" not in redacted
+
+
+def test_classifier_processes_newest_chunk_first():
+    classifier = _build_classifier()
+    prompts = []
+
+    def fake_completion(prompt: str):
+        prompts.append(prompt)
+        return {"choices": [{"message": {"content": '{"insights": []}'}}]}
+
+    classifier._chat_completion = fake_completion
+    old_chunk = "OLD-CONTEXT " + ("x" * 16000) + "\n"
+    new_chunk = "NEW-CONTEXT " + ("y" * 16000) + "\n"
+
+    classifier.classify(old_chunk + new_chunk, "session-long")
+
+    assert "NEW-CONTEXT" in prompts[0]
+    assert "OLD-CONTEXT" in prompts[1]
+
+
+def test_classifier_raises_when_llm_call_fails():
+    classifier = _build_classifier()
+
+    def failing_completion(_prompt: str):
+        raise OSError("provider unavailable")
+
+    classifier._chat_completion = failing_completion
+
+    try:
+        classifier.classify("session content", "session-failed")
+    except ClassificationError as error:
+        assert "provider unavailable" in str(error)
+    else:
+        raise AssertionError("ClassificationError was not raised")
+
+
+def test_classifier_prompt_requires_evidence_for_preferences_and_errors():
+    assert "preferenza esplicita dell'utente" in CLASSIFIER_PROMPT
+    assert "nome esatto dell'errore" in CLASSIFIER_PROMPT
+    assert "non reinterpretarlo" in CLASSIFIER_PROMPT

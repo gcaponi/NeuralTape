@@ -1,8 +1,17 @@
-# Neural Tape v2.2
+# Neural Tape
 
 Automatic memory layer for VS Code Copilot sessions.
 
 Neural Tape reads the JSONL transcripts that VS Code already writes to disk, waits until the session becomes idle, classifies the useful long-term insights with an OpenAI-compatible LLM, then writes them to Lex memory and the local archive.
+
+## Version status
+
+- **v2.2 is the live automatic pipeline.** The systemd user timer still invokes
+	`lex/v22/run.py` and writes `_Lex/memory.md` plus the local archive.
+- **v3 is available as an opt-in one-shot pipeline.** It persists layered episodes
+	in SQLite and generates per-project `current-focus.json` and `working-set.json`.
+- The timer must not move to v3 until the 10-session validation and handoff metrics
+	in `docs/v3-phase1-spec.md` are satisfied.
 
 ## What changed in v2.2
 
@@ -49,6 +58,19 @@ Preview a session without writing memory:
 ```bash
 ETERCERVO_ROOT=/path/to/EterCervo /usr/bin/python lex/v22/run.py --once <session-id-prefix> --preview -v
 ```
+
+Run v3 manually for one exact session or unique session prefix:
+
+```bash
+NEURALTAPE_V3=1 /usr/bin/python lex/v3/run.py \
+	--once <session-id-or-prefix> \
+	--project-root /path/to/project
+```
+
+The project root is mandatory because VS Code sessions can span multiple workspace
+roots. The command classifies at most the newest 30,000 parsed characters by default,
+is idempotent per project/session, and refreshes the project context on every run.
+Use `--max-transcript-chars` only for explicit experiments.
 
 On Guglielmo's machine the timer is installed as:
 

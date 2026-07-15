@@ -69,17 +69,30 @@ Per ogni insight degno, restituisci:
 
 REGOLE:
 - Massimo 8 insight (meglio pochi e giusti).
-- Se la sessione è routine senza apprendimenti reali, restituisci {"insights": []}.
+- Se la sessione è routine senza apprendimenti reali, restituisci {{"insights": []}}.
 - Non inventare: basati SOLO sul contenuto della trascrizione.
+- Usa "preference" solo quando compare una preferenza esplicita dell'utente;
+    una scelta implementativa o architetturale e' una "decision".
+- Usa "semantic" solo se la trascrizione dimostra ricorrenza o stabilita';
+    un evento o una decisione osservati una sola volta sono "episodic".
+- Per failure ed eccezioni conserva il nome esatto dell'errore osservato e non reinterpretarlo.
 - Rispondi SOLO con JSON valido, nessun markdown, nessun commento.
 
 Formato output:
-{"insights": [{"category":"...","title":"...","context":"...","implication":"...","layer":"...","confidence":0.0}]}
+{{"insights": [{{"category":"...","title":"...","context":"...","implication":"...","layer":"...","confidence":0.0}}]}}
 
 Trascrizione:
 ---
 {transcript}
 ---"""
+
+
+class ClassificationError(RuntimeError):
+    """The classifier could not complete a trustworthy classification."""
+
+
+class ClassificationDeferred(ClassificationError):
+    """Classification was intentionally deferred by the cost policy."""
 
 
 @dataclass
@@ -175,10 +188,10 @@ class ClassifierV3:
         allowed, reason = self.cost_policy.can_call()
         if not allowed:
             log.warning("LLM call skipped: %s", reason)
-            return []
+            raise ClassificationDeferred(f"LLM call skipped: {reason}")
 
         # 3. Classify
-        chunks = self._split(redacted)
+        chunks = list(reversed(self._split(redacted)))
         valid: list[ClassifierInsight] = []
         seen_titles: set[str] = set()
 
@@ -195,21 +208,21 @@ class ClassifierV3:
                 response = self._chat_completion(prompt)
                 tokens_used = self._estimate_tokens(prompt, response)
                 self.cost_policy.record_call(tokens_used)
-            except Exception as e:
-                log.error("LLM call failed: %s", e, exc_info=True)
-                return valid  # partial result
+            except Exception as error:
+                log.error("LLM call failed: %s", error, exc_info=True)
+                raise ClassificationError(f"LLM call failed: {error}") from error
 
             content = response.get("choices", [{}])[0].get("message", {}).get("content") or ""
             try:
                 data = json.loads(content)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as error:
                 log.warning("LLM returned non-JSON. First 300 chars: %s", content[:300])
-                continue
+                raise ClassificationError("LLM returned non-JSON") from error
 
             insights = data.get("insights", [])
             if not isinstance(insights, list):
                 log.warning("LLM 'insights' is not a list")
-                continue
+                raise ClassificationError("LLM 'insights' is not a list")
 
             for d in insights:
                 if not isinstance(d, dict):

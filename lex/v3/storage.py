@@ -213,6 +213,18 @@ class Storage:
             for r in rows
         ]
 
+    def has_event(self, project_id: str, *, source_type: str,
+                  source_ref: str | None) -> bool:
+        """Return whether an event marker already exists for this source."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT 1 FROM event_log "
+                "WHERE project_id = ? AND source_type = ? AND source_ref IS ? "
+                "LIMIT 1",
+                (project_id, source_type, source_ref),
+            ).fetchone()
+        return row is not None
+
     # ---- internals ------------------------------------------------------
 
     def _bootstrap(self) -> None:

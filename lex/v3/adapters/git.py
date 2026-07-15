@@ -126,18 +126,6 @@ class GitAdapter:
         """
         files: list[str] = []
 
-        # Files from recent commits (last 10)
-        try:
-            committed = self._git("log", "--oneline", "--name-only",
-                                  "--diff-filter=AM",  # Added or Modified
-                                  f"-{max_files}", "--format=")
-            for line in committed.splitlines():
-                line = line.strip()
-                if line and line not in files:
-                    files.append(line)
-        except RuntimeError:
-            pass
-
         # Uncommitted changes
         try:
             uncommitted = self._git("diff", "--name-only", "--diff-filter=AM")
@@ -152,6 +140,18 @@ class GitAdapter:
         try:
             untracked = self._git("ls-files", "--others", "--exclude-standard")
             for line in untracked.splitlines():
+                line = line.strip()
+                if line and line not in files:
+                    files.append(line)
+        except RuntimeError:
+            pass
+
+        # Files from recent commits (last 10)
+        try:
+            committed = self._git("log", "--oneline", "--name-only",
+                                  "--diff-filter=AM",  # Added or Modified
+                                  f"-{max_files}", "--format=")
+            for line in committed.splitlines():
                 line = line.strip()
                 if line and line not in files:
                     files.append(line)
