@@ -169,14 +169,65 @@ class PreLoad:
                 pass
         return "unknown"
 
+    @staticmethod
+    def _normalize_project_name(workspace_or_project: str) -> str:
+        """Normalize a workspace label into a project name.
+
+        Accepts both legacy labels ('EterCervo-Workspace.code-workspace') and already
+        normalized values ('EterCervo'). Strips common VS Code suffixes.
+        """
+        if not workspace_or_project:
+            return "default"
+        name = str(workspace_or_project)
+        for suffix in ("-Workspace.code-workspace", ".code-workspace", ".code.json"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        return name or "default"
+
+    @staticmethod
+    def _parse_timestamp(frontmatter: Dict[str, Any]) -> Optional[datetime]:
+        """Parse a robust timestamp from frontmatter.
+
+        Priority: 'timestamp' (ISO-8601) -> 'date' (YYYY-MM-DD at midnight) -> None.
+        Tolerates 'Z' suffix, missing timezone, and date-only strings.
+        """
+        ts_raw = frontmatter.get("timestamp", "")
+        if isinstance(ts_raw, datetime):
+            return ts_raw.astimezone() if ts_raw.tzinfo else ts_raw.replace(tzinfo=None)
+        ts_str = str(ts_raw or "").strip()
+
+        if ts_str:
+            try:
+                parsed = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=None)
+            except ValueError:
+                pass
+
+        date_raw = frontmatter.get("date", "")
+        date_str = str(date_raw or "").strip()
+        if date_str:
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+                try:
+                    return datetime.strptime(date_str, fmt)
+                except ValueError:
+                    continue
+        return None
+
     def _read_insights(self, project: str, lookback_days: int, assistant: str = None) -> List[Dict]:
         """Read archive insights filtered by project, recency, confidence, and decay.
-        
+
         Reads from archive/{category}/ (current structure, fixed from old {assistant}/{category}/).
         Applies Ebbinghaus decay: old insights rank lower and are auto-forged below threshold.
+
+        Schema (standardized 2026-07-18):
+          Required:  type, date|timestamp
+          Optional:  project, workspace, confidence, assistant, session, status, source
+        Backward-compatible: missing fields get sensible defaults so legacy v2.2
+        archives written before standardization still rank and surface.
         """
-        insights = []
-        cutoff = datetime.now() - timedelta(days=lookback_days)
+        insights: List[Dict] = []
+        cutoff = datetime.now().astimezone() - timedelta(days=lookback_days)
 
         if not self.archive_dir.exists():
             return insights
@@ -190,39 +241,47 @@ class PreLoad:
                     text = fpath.read_text(encoding="utf-8")
                     frontmatter = self._extract_frontmatter(text)
 
-                    ts_raw = frontmatter.get("timestamp", "")
-                    if isinstance(ts_raw, datetime):
-                        ts_raw = ts_raw.isoformat()
-                    ts_str = str(ts_raw) if ts_raw else ""
-
-                    try:
-                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    except ValueError:
+                    ts = self._parse_timestamp(frontmatter)
+                    if ts is None:
+                        continue  # Unparseable: skip silently (don't pollute ranking)
+                    ts_aware = ts if ts.tzinfo else ts.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                    if ts_aware < cutoff:
                         continue
 
-                    if ts < cutoff:
-                        continue
-
-                    confidence = str(frontmatter.get("confidence", "")).lower()
+                    confidence = str(frontmatter.get("confidence", "") or "medium").lower()
                     if confidence == "low":
                         continue
 
                     # Decay + auto-forget (ported from agentmemory)
+                    ts_str = ts.isoformat()
                     strength = decay_strength(ts_str)
                     if is_below_threshold(strength):
                         continue  # Auto-forget: skip insights below threshold
 
-                    proj = frontmatter.get("project", "default")
+                    # Project resolution: 'project' field -> 'workspace' (normalized) -> 'default'
+                    proj_raw = frontmatter.get("project")
+                    if proj_raw:
+                        proj = str(proj_raw)
+                    else:
+                        workspace = frontmatter.get("workspace", "")
+                        proj = self._normalize_project_name(workspace) if workspace else "default"
+
                     if project != "default" and proj != project:
                         continue
+
+                    if assistant:
+                        ins_assistant = str(frontmatter.get("assistant", "") or "lex").lower()
+                        if ins_assistant != assistant.lower():
+                            continue
 
                     insights.append({
                         "file": str(fpath.relative_to(self.archive_dir.parent)),
                         "type": frontmatter.get("type", "meta"),
                         "timestamp": ts_str,
                         "confidence": confidence,
-                        "content": self._extract_title(text) or frontmatter.get("trigger", ""),
+                        "content": self._extract_title(text) or frontmatter.get("trigger", "") or fpath.stem,
                         "project": proj,
+                        "assistant": str(frontmatter.get("assistant", "") or "lex"),
                         "strength": round(strength, 3),  # Decay-aware ranking key
                     })
                 except Exception:

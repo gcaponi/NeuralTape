@@ -53,27 +53,63 @@ TAPE_SUBDIR = {
 class MemoryWriter:
     """Write classified insights to memory.md and tape/archive/."""
 
-    def __init__(self, memory_file: Path, tape_root: Path):
+    def __init__(self, memory_file: Path, tape_root: Path, *, assistant: str = "lex"):
         self.memory_file = memory_file
         self.tape_root = tape_root
+        self.assistant = assistant
+
+    @staticmethod
+    def _normalize_project(workspace_label: str) -> str:
+        """Normalize a VS Code workspace label into a project name.
+
+        e.g. 'EterCervo-Workspace.code-workspace' -> 'EterCervo'.
+        Falls back to the raw label if no known suffix is detected.
+        """
+        if not workspace_label:
+            return "default"
+        name = workspace_label
+        for suffix in ("-Workspace.code-workspace", ".code-workspace", ".code.json"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        return name or "default"
 
     def write(self, insights: list[dict], session_label: str, session_id: str) -> int:
-        """Write insights. Returns count successfully written."""
+        """Write insights. Returns count successfully written.
+
+        Frontmatter schema (v2.2 standardized, 2026-07-18):
+          type, date, timestamp, project, workspace, session,
+          confidence, assistant, status, source
+        """
         count = 0
-        today = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now().astimezone()
+        today = now.strftime("%Y-%m-%d")
+        timestamp = now.isoformat(timespec="seconds")
+        project = self._normalize_project(session_label)
 
         for insight in insights:
             category = insight.get("category", "neutral")
             description = insight.get("description", "").strip()
             context = insight.get("context", "").strip()
             implication = insight.get("implication", "").strip()
+            confidence = insight.get("confidence", "medium")
             if not description:
                 continue
 
             try:
                 self._append_to_memory(today, category, description, context, implication)
                 self._append_to_tape(
-                    today, category, description, context, implication, session_label, session_id
+                    today,
+                    category,
+                    description,
+                    context,
+                    implication,
+                    session_label,
+                    session_id,
+                    timestamp=timestamp,
+                    project=project,
+                    confidence=confidence,
+                    assistant=self.assistant,
                 )
                 count += 1
             except Exception as e:
@@ -132,6 +168,11 @@ class MemoryWriter:
         implication: str,
         session_label: str,
         session_id: str,
+        *,
+        timestamp: str = "",
+        project: str = "default",
+        confidence: str = "medium",
+        assistant: str = "lex",
     ) -> None:
         subdir = TAPE_SUBDIR.get(category, category.replace("-", "_"))
         archive_dir = self.tape_root / "tape" / "archive" / subdir
@@ -145,11 +186,18 @@ class MemoryWriter:
         if filepath.exists():
             filepath = archive_dir / f"{date}-{session_id[:8]}-{safe_desc}-{datetime.now().strftime('%H%M%S')}.md"
 
+        # Standardized frontmatter (2026-07-18):
+        #   timestamp, project, confidence, assistant added for pre_load.py compatibility.
+        #   Legacy fields (date, workspace, session, status, source) preserved.
         content = f"""---
 type: {category}
 date: {date}
-session: {session_id}
+timestamp: {timestamp}
+project: {project}
 workspace: {session_label}
+session: {session_id}
+confidence: {confidence}
+assistant: {assistant}
 status: auto-classified
 source: neural-tape-v2.2
 ---
