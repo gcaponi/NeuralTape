@@ -136,21 +136,30 @@ class FocusGenerator:
     # ---- internals ------------------------------------------------------
 
     def _extract_goal(self, recent_eps: list, semantic_eps: list) -> str:
-        """Extract the current goal from recent episodes.
+        """Extract the current goal from recent episodes or git commits.
 
-        Strategy: look at the most recent episodic/semantic entries and derive
-        the goal from their titles + bodies. Simple heuristic: use the title of
-        the most recent high-confidence episode.
+        Priority:
+          1. Latest commit message (if <24h) — strongest signal of what's happening now
+          2. Most recent high-confidence episodic/semantic episode title
+          3. Fallback: project name
         """
-        # Sort by created_at desc
+        # Priority 1: latest commit message (fresh signal)
+        try:
+            recent_commits = self.git.poll_commits(since_epoch=time.time() - self.commit_stale_hours * 3600)
+            if recent_commits:
+                return recent_commits[0].message_short
+        except Exception:
+            pass
+
+        # Priority 2: recent episodes
         all_eps = sorted(
             recent_eps + semantic_eps,
             key=lambda e: e.created_at, reverse=True,
         )
         for ep in all_eps[:5]:
             if ep.confidence >= 0.6 and ep.title:
-                # Use title as goal (Fase 1 heuristic; Fase 2 will improve)
                 return ep.title
+
         # Fallback
         return f"working on {self.project.project_id}"
 

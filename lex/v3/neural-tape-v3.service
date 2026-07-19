@@ -1,0 +1,13 @@
+[Unit]
+Description=Neural Tape v3 transcript classifier
+Wants=neural-tape-v3.timer
+
+[Service]
+Type=oneshot
+WorkingDirectory=/run/media/gcaponi/Back-Up/NeuralTape
+Environment=NEURALTAPE_V3=1
+Environment=ETERCERVO_ROOT=/run/media/gcaponi/Back-Up/EterCervo
+ExecStart=/run/media/gcaponi/Back-Up/NeuralTape/lex/v3/run-cron-v3.sh
+
+[Install]
+WantedBy=timers.target

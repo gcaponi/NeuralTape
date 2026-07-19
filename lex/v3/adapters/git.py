@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..events import EventBus
+    from ..events import Event, EventBus
 
 log = logging.getLogger("neural-tape-v3")
 
@@ -159,6 +159,68 @@ class GitAdapter:
             pass
 
         return files[:max_files]
+
+    def publish_recent_commits(self, since_epoch: float | None = None,
+                               max_events: int = 20) -> int:
+        """Poll recent commits and publish each as a git.commit event on EventBus.
+
+        Args:
+            since_epoch: poll commits since this epoch. Default: 24h ago.
+            max_events: max events to publish in a single call.
+
+        Returns:
+            Number of commit events published.
+
+        Idempotent: already-published events are skipped via event_log lookup.
+        """
+        if since_epoch is None:
+            since_epoch = time.time() - 86400  # 24h
+
+        commits = self.poll_commits(since_epoch=since_epoch)
+        if not commits:
+            return 0
+
+        # Import Event locally to handle both package and flat-load contexts
+        try:
+            from ..events import Event
+        except ImportError:
+            from events import Event
+
+        branch = self.get_current_branch()
+        published = 0
+        for commit in commits[:max_events]:
+            # Skip if already published (idempotency via event_log)
+            existing = self.event_bus.query(
+                self.project_id,
+                source_type="git.commit",
+                limit=1,
+            )
+            already = any(
+                e.source_ref == commit.sha[:12]
+                for e in existing
+            )
+            if already:
+                continue
+
+            event = Event(
+                project_id=self.project_id,
+                source_type="git.commit",
+                source_ref=commit.sha[:12],
+                payload={
+                    "sha": commit.sha,
+                    "author": commit.author,
+                    "message_short": commit.message_short,
+                    "branch": branch,
+                    "files_changed_count": len(commit.files_changed),
+                },
+            )
+            self.event_bus.publish(event)
+            published += 1
+
+        if published:
+            log.info("published %d git commit events for %s (branch=%s)",
+                     published, self.project_id, branch)
+        return published
 
     def get_diff_stat(self) -> dict[str, int]:
         """Return {file: lines_changed} for uncommitted changes."""

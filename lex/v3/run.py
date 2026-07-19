@@ -29,6 +29,11 @@ from typing import Callable, Protocol
 THIS_DIR = Path(__file__).resolve().parent          # lex/v3/
 TAPE_ROOT = THIS_DIR.parent.parent                  # NeuralTape/
 
+# Ensure lex/v3/ is importable for modules loaded via _load_from_path
+# (git.py uses `from events import Event` at runtime).
+if str(THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(THIS_DIR))
+
 log = logging.getLogger("neural-tape-v3")
 
 CLASSIFIED_EVENT = "transcript.classified"
@@ -267,6 +272,39 @@ def run_once(
         project=project,
         output_dir=output_dir,
     ).generate()
+
+    # Publish recent git commits to EventBus
+    try:
+        published_commits = git_adapter.publish_recent_commits()
+        if published_commits:
+            log.info("published %d git commit events for %s", published_commits, project.project_id)
+    except Exception as e:
+        log.warning("git commit publishing failed (non-fatal): %s", e)
+
+    # Fase 2: Resume Project renderer + Agent Handoff bundle
+    try:
+        resume_mod = _load_sibling("resume")
+        resume_mod.ResumeProjectRenderer(
+            storage=storage,
+            git_adapter=git_adapter,
+            project_id=project.project_id,
+            project_root=project.root,
+            output_dir=output_dir,
+        ).generate()
+    except Exception as e:
+        log.warning("resume-project renderer failed (non-fatal): %s", e)
+
+    try:
+        handoff_mod = _load_sibling("handoff")
+        handoff_mod.AgentHandoffBundle(
+            storage=storage,
+            git_adapter=git_adapter,
+            project_id=project.project_id,
+            project_root=project.root,
+            output_dir=output_dir,
+        ).generate()
+    except Exception as e:
+        log.warning("agent-handoff bundle failed (non-fatal): %s", e)
 
     return RunOnceResult(
         session_id=session_id,
