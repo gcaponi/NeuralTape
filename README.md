@@ -6,12 +6,18 @@ Neural Tape reads the JSONL transcripts that VS Code already writes to disk, wai
 
 ## Version status
 
-- **v2.2 is the live automatic pipeline.** The systemd user timer still invokes
-	`lex/v22/run.py` and writes `_Lex/memory.md` plus the local archive.
-- **v3 is available as an opt-in one-shot pipeline.** It persists layered episodes
-	in SQLite and generates per-project `current-focus.json` and `working-set.json`.
-- The timer must not move to v3 until the 10-session validation and handoff metrics
-	in `docs/v3-phase1-spec.md` are satisfied.
+- **v3 is the live automatic pipeline since 2026-07-20.** The systemd user timer
+	invokes `lex/v3/run-cron-v3.sh` → `lex/v3/run.py run_once`, persists layered
+	episodes in SQLite, and regenerates per-project `current-focus.json` and
+	`working-set.json` under `tape/v3/projects/`.
+- **v2.2 is the rollback path.** The `neural-tape-v22.timer` unit is disabled but
+	not masked; `tools/rollback_to_v22.sh` re-enables it. v2.2 wrote `_Lex/memory.md`
+	plus the `tape/archive/` tree — kept read-only for history.
+- **Activation gate.** v3 reached the switch after: cognition pipeline complete
+	(EC2-5, Fase 2), 89/89 tests green, dry-run + systemd run verified on live
+	session `bf56290c` (EterCervo). Residual formal gates from `docs/v3-phase1-spec.md`
+	§9 (10-session validation, ZEUS confidence, EventBus commits, M2 baseline) are
+	tracked as hardening, not blockers.
 
 ## What changed in v2.2
 
@@ -72,11 +78,13 @@ roots. The command classifies at most the newest 30,000 parsed characters by def
 is idempotent per project/session, and refreshes the project context on every run.
 Use `--max-transcript-chars` only for explicit experiments.
 
-On Guglielmo's machine the timer is installed as:
+On Guglielmo's machine the active timer is v3 (v2.2 disabled 2026-07-20):
 
 ```bash
-systemctl --user status neural-tape-v22.timer
-tail -40 tape/.state/v22-cron.log
+systemctl --user status neural-tape-v3.timer
+systemctl --user list-timers neural-tape-v3.timer
+tail -40 tape/.state/v22-cron.log     # legacy v2.2 log (frozen)
+journalctl --user -u neural-tape-v3.service -n 40 --no-pager  # v3 live log
 ```
 
 ## Runtime data
@@ -96,7 +104,10 @@ Only `.gitkeep` placeholders are tracked for the tape directories.
 
 ## Legacy
 
-The v1.2 log-parser pipeline is archived under `legacy/v1.2/`. It is kept for reference and possible rollback, but the active workflow is v2.2.
+The v1.2 log-parser pipeline is archived under `legacy/v1.2/`. The v2.2 LLM
+classifier pipeline (`lex/v22/`) is in warm standby — disabled at the systemd
+level but retained for rollback via `tools/rollback_to_v22.sh`. The active
+workflow since 2026-07-20 is v3.
 
 ## License
 
