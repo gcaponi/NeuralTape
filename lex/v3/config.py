@@ -30,6 +30,14 @@ DEFAULTS = {
     },
     "events": {"enabled_sources": ["transcript", "git.commit"]},
     "redaction": {"extra_patterns": []},
+    "memory": {
+        "promote_threshold_working_to_episodic": 0.6,
+        "promote_threshold_episodic_to_semantic": 0.8,
+        "promote_min_age_hours": 4,
+        "promote_min_similar_episodes": 2,
+        "promote_min_sessions_for_semantic": 3,
+        "working_ttl_hours": 48,
+    },
 }
 
 
@@ -52,6 +60,15 @@ class RedactionConfig:
     extra_patterns: list[tuple[str, str]] = field(default_factory=list)
 
 @dataclass
+class MemoryConfig:
+    promote_threshold_working_to_episodic: float
+    promote_threshold_episodic_to_semantic: float
+    promote_min_age_hours: float
+    promote_min_similar_episodes: int
+    promote_min_sessions_for_semantic: int
+    working_ttl_hours: float
+
+@dataclass
 class V3Config:
     enabled: bool
     tape_root: Path               # NeuralTape/ root, used to resolve relative paths
@@ -59,6 +76,7 @@ class V3Config:
     cost: CostConfig
     events: EventsConfig
     redaction: RedactionConfig
+    memory: MemoryConfig
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -126,4 +144,12 @@ def load(tape_root: Path, config_path: Path | None = None) -> V3Config:
             enabled_sources=list(merged["events"]["enabled_sources"]),
         ),
         redaction=RedactionConfig(extra_patterns=extra),
+        memory=MemoryConfig(
+            promote_threshold_working_to_episodic=float(merged["memory"]["promote_threshold_working_to_episodic"]),
+            promote_threshold_episodic_to_semantic=float(merged["memory"]["promote_threshold_episodic_to_semantic"]),
+            promote_min_age_hours=float(merged["memory"]["promote_min_age_hours"]),
+            promote_min_similar_episodes=int(merged["memory"]["promote_min_similar_episodes"]),
+            promote_min_sessions_for_semantic=int(merged["memory"]["promote_min_sessions_for_semantic"]),
+            working_ttl_hours=float(merged["memory"]["working_ttl_hours"]),
+        ),
     )

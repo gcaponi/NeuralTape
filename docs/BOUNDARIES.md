@@ -1,19 +1,19 @@
 # Neural Tape <-> Lex Memory Boundary Contract
 
-> Version: 2.2
-> Date: 2026-07-08
+> Version: 3.0
+> Date: 2026-07-21
 > Status: Active
 
 ## The Contract
 
-| Dimension | Neural Tape v2.2 | `_Lex/memory.md` |
+| Dimension | Neural Tape v3 | `_Lex/memory.md` |
 |---|---|---|
 | Source | VS Code Copilot transcript JSONL | Curated operational memory |
-| Author | Automated classifier acting as Lex | Lex + automated Neural Tape writer |
-| Input | `user.message`, `assistant.message`, `reasoningText`, tool events | High-value patterns, decisions, warnings, preferences |
-| Curation | LLM classifier, strict prompt, max 5-7 insights/session | `Recent Context` + category sections |
-| Storage | `tape/archive/<category>/` | `_Lex/memory.md` |
-| Trigger | User systemd timer every 5 minutes, classify only when idle | Startup read + automatic writes |
+| Author | Automated v3 pipeline (classifier + layered memory) | Lex, manually via `tools/lex-capture.py` |
+| Input | `user.message`, `assistant.message`, `reasoningText`, tool events, git signals | High-value patterns, decisions, warnings, preferences |
+| Curation | LLM classifier, layered episodes (working/episodic/semantic) + confidence | `Recent Context` + category sections |
+| Storage | SQLite `tape/v3/neuraltape.db` + markdown mirror `tape/archive/<category>/` | `_Lex/memory.md` |
+| Trigger | `neural-tape-v3.timer` (systemd user, every 5 minutes) | Startup read + manual writes by Lex |
 
 ## Rules
 
@@ -21,36 +21,49 @@
 
 Memory selection is Lex work. Neural Tape reads the session transcript and decides what is worth keeping.
 
-### 2. Neural Tape may write `_Lex/memory.md`
+### 2. Neural Tape does NOT write `_Lex/memory.md`
 
-This is the v2.2 change. The writer inserts each accepted insight into `Recent Context` and the matching category section, then creates a full archive file.
+Since v3 is the active pipeline (2026-07-20), `_Lex/memory.md` is **manual curated memory only**: Lex appends entries via `tools/lex-capture.py` (or Edit/Write for long entries). The automatic source of truth is SQLite (`tape/v3/neuraltape.db`) plus the markdown mirror in `tape/archive/<category>/`, exported per episode by `lex/v3/markdown_export.py`.
 
 ### 3. Runtime data stays local
 
-Do not commit `.env`, `session-context.md`, `tape/.state/`, transcript-derived session files, or archive content. Only placeholders are tracked.
+Do not commit `.env`, `session-context.md`, `tape/.state/`, `tape/v3/`, transcript-derived session files, or archive content. Only placeholders are tracked.
 
 ### 4. `pre_load.py` remains the startup bridge
 
-Lex still runs `neural-tape/lex/pre_load.py` at startup and reads `session-context.md` to rebuild short-term context.
+Lex still runs `neural-tape/lex/pre_load.py` at startup and reads `session-context.md` to rebuild short-term context. `pre_load.py` reads the automatic insights from `tape/archive/` (markdown mirror of the v3 DB) and merges them with the curated `_Lex/memory.md`.
 
-### 5. v1.2 is legacy
+### 5. Verification is via the v3 systemd journal
 
-`log_parser.py`, `post_capture.py`, and `deja_vu.py` live under `legacy/v1.2/`. They are not part of the default workflow.
+The source of truth for pipeline health is the v3 service journal, not the old v2.2 cron log:
+
+```bash
+systemctl --user status neural-tape-v3.timer
+journalctl --user -u neural-tape-v3.service -n 40 --no-pager
+```
+
+`tape/.state/v22-cron.log` is frozen legacy history.
+
+### 6. v2.2 is disabled, v1.2 is legacy
+
+`neural-tape-v22.timer` is disabled since 2026-07-20 (rollback path retained via `tools/rollback_to_v22.sh`). `log_parser.py`, `post_capture.py`, and `deja_vu.py` live under `legacy/v1.2/` and are not part of the workflow.
 
 ## Operational Flow
 
 ```text
 VS Code Chat session
     -> transcript JSONL on disk
-    -> neural-tape-v22.timer every 5 minutes
-    -> SessionDetector waits until idle
-    -> TranscriptParser formats the delta
-    -> LLMClassifier extracts high-value insights
-    -> MemoryWriter updates memory.md + tape/archive
-    -> pre_load.py exposes context at next startup
+    -> neural-tape-v3.timer every 5 minutes (run-cron-v3.sh)
+    -> idle/growth detection (skip already-classified, unchanged transcripts)
+    -> v3 classifier extracts layered insights (working/episodic/semantic + confidence)
+    -> Storage: SQLite tape/v3/neuraltape.db
+    -> markdown_export.py mirrors each episode to tape/archive/<category>/
+    -> resume.py + handoff.py regenerate project continuity artifacts (Fase 2)
+    -> pre_load.py reads archive + memory.md -> session-context.md at next startup
 ```
 
 ## Changelog
 
+- 2026-07-21 v3.0: v3 is the active pipeline. `_Lex/memory.md` becomes manual curated memory only; automatic insights live in SQLite + `tape/archive/` mirror. Verification moves to `journalctl --user -u neural-tape-v3.service`.
 - 2026-07-08 v2.2: Switched from CLI-log staging/review to automatic VS Code transcript classification.
 - 2026-06-07 v1.0: Initial Neural Tape / Lex Memory boundary.

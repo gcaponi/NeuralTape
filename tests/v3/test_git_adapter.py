@@ -146,3 +146,37 @@ def test_parse_log():
     assert "src/main.py" in events[0].files_changed
     assert events[1].sha == "def456"
     assert events[1].message_short == "fix: resolve bug"
+
+
+def test_publish_recent_commits_idempotent():
+    """Regression: publish_recent_commits must not re-publish an already-known sha.
+
+    Bug: the idempotency check compared the sha only against the single most
+    recent event_log row (limit=1), so any commit older than the latest one was
+    re-published at every tick. Fixed by looking up source_ref via
+    storage.has_event().
+    """
+    from events import EventBus  # type: ignore[import-not-found]
+    from storage import Storage  # type: ignore[import-not-found]
+
+    repo = Path(tempfile.mkdtemp(prefix="nt-v3-git-"))
+    _init_git_repo(repo)
+    _make_commit(repo, "a.py", "a", "first commit")
+    _make_commit(repo, "b.py", "b", "second commit")
+
+    db_path = Path(tempfile.mkdtemp(prefix="nt-v3-db-")) / "test.db"
+    storage = Storage(db_path)
+    bus = EventBus(storage)
+    adapter = GitAdapter(project_root=repo, event_bus=bus, project_id="test-proj")
+
+    since = time.time() - 3600
+    first = adapter.publish_recent_commits(since_epoch=since)
+    assert first >= 3  # initial + a.py + b.py
+
+    # Second call with the same window must publish nothing.
+    second = adapter.publish_recent_commits(since_epoch=since)
+    assert second == 0, f"re-published {second} already-known commits"
+
+    rows = storage.query_events("test-proj", source_type="git.commit", limit=100)
+    refs = [r["source_ref"] for r in rows]
+    assert len(refs) == len(set(refs)), "duplicate source_ref in event_log"

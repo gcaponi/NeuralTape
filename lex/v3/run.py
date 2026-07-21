@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""NeuralTape v3 — entry point / self-check (Fase 0).
+"""NeuralTape v3 — entry point / orchestrator (Fasi 0-2, active pipeline).
 
-In Fase 0 v3 has no cron loop yet (that's Fase 1). This module provides:
+v3 is the live pipeline since 2026-07-20: `neural-tape-v3.timer` invokes
+`run-cron-v3.sh` -> `run.py run_once` every 5 minutes. This module provides:
     --selfcheck       smoke test: load config, init storage, verify coexistence.
     --bootstrap ...   delegates to bootstrap_projects.py.
     --status          print current v3 status (config + storage + cost).
+    --once <session>  classify one session (used by the cron wrapper).
 
-It does NOT touch v2.2 cron. v2.2 keeps running on its own timer regardless.
+v2.2 (`neural-tape-v22.timer`) is disabled since 2026-07-20; rollback only.
 
 Usage:
     python lex/v3/run.py --selfcheck
-    NEURAL_TAPE_V3=1 python lex/v3/run.py --status
-    NEURAL_TAPE_V3=1 python lex/v3/run.py --once <session> --project-root <path>
+    NEURALTAPE_V3=1 python lex/v3/run.py --status
+    NEURALTAPE_V3=1 python lex/v3/run.py --once <session> --project-root <path>
 """
 
 from __future__ import annotations

@@ -7,8 +7,11 @@ Replaces v22/classifier.py. Key improvements:
 - Integrates CostPolicy (Fase 0) for budget checks.
 - Persists classified insights directly to Storage as episodes.
 
-Coexists with v2.2: v3 writes to Storage (SQLite) while v2.2 continues writing
-to _Lex/memory.md. v2.2 is disabled only after validation (M1+M2 metrics).
+v3 is the active pipeline since 2026-07-20: it persists classified insights to
+Storage (SQLite `tape/v3/neuraltape.db`) and mirrors each episode to
+`tape/archive/<category>/` via markdown_export. v3 does NOT write
+`_Lex/memory.md` — that file is manual curated memory only (Lex writes it via
+`tools/lex-capture.py` in EterCervo). v2.2 is disabled since 2026-07-20.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -188,7 +188,10 @@ class MemoryPromoter:
         return []
 
     def _mem_config(self) -> dict:
-        try:
-            return self.cfg.__dict__.get("memory_config", {}) or {}
-        except AttributeError:
-            return {}
+        mem = getattr(self.cfg, "memory", None)
+        if mem is not None and not isinstance(mem, dict):
+            mem = asdict(mem)
+        if not mem:
+            # Legacy fallback: test doubles / old callers attach a plain dict.
+            mem = getattr(self.cfg, "memory_config", None)
+        return dict(mem) if mem else {}

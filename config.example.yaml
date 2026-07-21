@@ -33,6 +33,13 @@ v3:
     enabled_sources: ["transcript", "git.commit"]
   redaction:
     extra_patterns: []
+  memory:
+    promote_threshold_working_to_episodic: 0.6
+    promote_threshold_episodic_to_semantic: 0.8
+    promote_min_age_hours: 4
+    promote_min_similar_episodes: 2
+    promote_min_sessions_for_semantic: 3
+    working_ttl_hours: 48
 
 storage:
   memory_file: "_Lex/memory.md"

@@ -372,13 +372,13 @@ Questa è la vista piatta di tutti i TODO delle fasi, pronta per essere spostata
 - [x] 1.2 Decisione MemPalace (Q2) — ✅ Chiusa (opzione C)
 - [x] 1.3 Definizione confidence (Q1) — ✅ Chiusa (opzione D, pesata git-heavy)
 - [x] 1.4 Git adapter per Event Bus
-- [ ] 1.5 Generator `current-focus.json`
-- [ ] 1.6 Generator `working-set.json`
+- [x] 1.5 Generator `current-focus.json` — ✅ In produzione (`lex/v3/focus.py`, per-progetto sotto `tape/v3/projects/`)
+- [x] 1.6 Generator `working-set.json` — ✅ In produzione (`lex/v3/workset.py`)
 - [ ] 1.7 Tests accuracy su 10 sessioni storiche
 
 ### Fase 2 — Project Continuity
-- [ ] 2.1 Formato `resume-project`
-- [ ] 2.2 Formato `handoff-bundle`
+- [x] 2.1 Formato `resume-project` — ✅ In produzione (`lex/v3/resume.py`, nel cron path)
+- [x] 2.2 Formato `handoff-bundle` — ✅ In produzione (`lex/v3/handoff.py`, nel cron path)
 - [ ] 2.3 Adapter Event Bus (pytest, docker, build)
 - [ ] 2.4 Adapter TODO completed (EterCervo)
 - [ ] 2.5 E2E handoff Copilot → Claude Code
@@ -430,7 +430,9 @@ Tutte le 6 Open Questions sono state chiuse con Guglielmo il 2026-07-14:
 3. ✅ **Lex sposta §8 in `EterCervo/todos/neural-tape-v3.md`** — Fatto.
 4. ✅ **Lex scrive specifica tecnica di Fase 0** (`NeuralTape/docs/v3-phase0-spec.md`) — Fatto + implementata e testata (47/47).
 5. ✅ **Inizio implementazione Fase 0** — Completata (tutti gli exit criteria verdi).
-6. **Lex avvia Fase 1 (Cognition Core)** — Prossimo passo.
+6. ✅ **Fase 1 (Cognition Core)** — Completata: `current-focus` e `working-set` generator in produzione via `neural-tape-v3.timer` (attiva dal 2026-07-20, v2.2 dismessa).
+7. ✅ **Fase 2 (Project Continuity, use cases)** — `resume.py` e `handoff.py` in produzione nel cron path; test suite 91/91 verdi (2026-07-21).
+8. **Fase 3 (Integration Surface: MCP server)** — Prossimo passo. In parallelo: hardening residuo (1.7 tests accuracy su sessioni storiche, 2.3-2.5 adapter Event Bus completi, gate formali di `docs/v3-phase1-spec.md` §9).
 
 ---
 

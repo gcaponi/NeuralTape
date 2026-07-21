@@ -189,15 +189,13 @@ class GitAdapter:
         branch = self.get_current_branch()
         published = 0
         for commit in commits[:max_events]:
-            # Skip if already published (idempotency via event_log)
-            existing = self.event_bus.query(
+            # Skip if already published (idempotency via event_log).
+            # NOTE: must check by exact source_ref — comparing only against the
+            # most recent event re-publishes older commits at every tick.
+            already = self.event_bus.storage.has_event(
                 self.project_id,
                 source_type="git.commit",
-                limit=1,
-            )
-            already = any(
-                e.source_ref == commit.sha[:12]
-                for e in existing
+                source_ref=commit.sha[:12],
             )
             if already:
                 continue

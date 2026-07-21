@@ -1,5 +1,10 @@
 # Neural Tape v2.2 — PRD Definitivo
 
+> ⚠️ **DOCUMENTO STORICO.** v2.2 è dismessa dal 2026-07-20 (`neural-tape-v22.timer` disabled).
+> La pipeline attiva è **v3** (`neural-tape-v3.timer`, SQLite `tape/v3/neuraltape.db` + mirror
+> markdown `tape/archive/`). Questo PRD resta come riferimento architetturale del design
+> transcript-reader; per lo stato corrente vedi `README.md` e `docs/BOUNDARIES.md`.
+
 **Version:** 2.2 (Transcript-Reader)
 **Status:** Approved — Implementazione
 **Author:** Lex per Guglielmo

@@ -105,3 +105,39 @@ def test_sweep_multiple_projects():
 
     assert stats_z.promoted_to_episodic >= 1
     assert stats_c.promoted_to_episodic >= 1
+
+
+def test_mem_config_reads_v3config_memory():
+    """MemoryPromoter must read thresholds from V3Config.memory (regression:
+    _mem_config used to look for a non-existent 'memory_config' attribute)."""
+    import config as v3config
+
+    d = Path(tempfile.mkdtemp(prefix="nt-v3-cfg-"))
+    cfg = v3config.load(tape_root=d, config_path=d / "missing.yaml")
+    p = MemoryPromoter(_storage(), cfg)
+
+    # Defaults must match the values previously hardcoded in memory.py.
+    assert p.threshold_work_to_episodic == 0.6
+    assert p.threshold_episodic_to_semantic == 0.8
+    assert p.min_age_hours == 4
+    assert p.min_similar_episodes == 2
+    assert p.min_sessions_for_semantic == 3
+    assert p.working_ttl_hours == 48
+
+
+def test_mem_config_yaml_override():
+    """A v3.memory section in config.yaml overrides the defaults."""
+    import config as v3config
+
+    d = Path(tempfile.mkdtemp(prefix="nt-v3-cfg-"))
+    (d / "config.yaml").write_text(
+        "v3:\n  memory:\n    working_ttl_hours: 12\n    promote_min_age_hours: 1\n",
+        encoding="utf-8",
+    )
+    cfg = v3config.load(tape_root=d, config_path=d / "config.yaml")
+    p = MemoryPromoter(_storage(), cfg)
+
+    assert p.working_ttl_hours == 12
+    assert p.min_age_hours == 1
+    # Untouched keys keep their defaults.
+    assert p.threshold_work_to_episodic == 0.6

@@ -2,7 +2,7 @@
 
 Automatic memory layer for VS Code Copilot sessions.
 
-Neural Tape reads the JSONL transcripts that VS Code already writes to disk, waits until the session becomes idle, classifies the useful long-term insights with an OpenAI-compatible LLM, then writes them to Lex memory and the local archive.
+Neural Tape reads the JSONL transcripts that VS Code already writes to disk, waits until the session becomes idle, classifies the useful long-term insights with an OpenAI-compatible LLM, then persists them as layered episodes in SQLite (`tape/v3/neuraltape.db`) with a markdown mirror in `tape/archive/`. `_Lex/memory.md` is manual curated memory only (Lex writes it via `tools/lex-capture.py` in EterCervo).
 
 ## Version status
 
@@ -33,19 +33,27 @@ The flow is fully automatic:
 VS Code transcript -> 5-minute user timer -> idle detection -> DeepSeek classifier -> memory.md + tape/archive
 ```
 
-## Live components
+## Live components (v3, active since 2026-07-20)
 
 ```text
-lex/pre_load.py             Startup context generator
-lex/v22/watcher.py          Finds active VS Code transcripts
-lex/v22/session_detector.py Tracks offsets and idle state
-lex/v22/transcript_parser.py Converts JSONL to LLM-readable text
-lex/v22/classifier.py       Calls the LLM using stdlib urllib
-lex/v22/memory_writer.py    Writes memory.md and archive entries
-lex/v22/notifier.py         Emits local notifications/log messages
-lex/v22/run.py              One-shot orchestrator
-lex/v22/run-cron.sh         systemd/cron-safe wrapper with flock
+lex/pre_load.py             Startup context generator (reads tape/archive + _Lex/memory.md)
+lex/v3/run.py               One-shot orchestrator (selfcheck, status, run_once)
+lex/v3/run-cron-v3.sh       systemd/cron-safe wrapper invoked by neural-tape-v3.timer
+lex/v3/classifier.py        LLM classifier: layered insights (working/episodic/semantic) + confidence
+lex/v3/storage.py           SQLite persistence (tape/v3/neuraltape.db)
+lex/v3/markdown_export.py   Mirrors each episode to tape/archive/<category>/
+lex/v3/memory.py            Layered memory (working -> episodic -> semantic)
+lex/v3/focus.py             current-focus.json generator per project
+lex/v3/workset.py           working-set.json generator per project
+lex/v3/resume.py            Resume Project renderer (Fase 2)
+lex/v3/handoff.py           Agent Handoff bundle (Fase 2)
+lex/v3/events.py            EventBus minimale (transcript + git.commit)
+lex/v3/redaction.py         Secret redaction before LLM payload
+lex/v3/cost.py              Cost/fallback policy for LLM calls
 ```
+
+The v2.2 modules under `lex/v22/` are retained read-only for rollback
+(`tools/rollback_to_v22.sh`); they are not part of the active flow.
 
 ## Quick start
 
@@ -59,7 +67,7 @@ cp config.example.yaml config.yaml
 
 Set `paths.neural_tape_root`, `paths.etervelo_wiki`, and `paths.lex_memory` in `config.yaml`.
 
-Preview a session without writing memory:
+Preview a session without writing memory (legacy v2.2 pipeline, rollback only):
 
 ```bash
 ETERCERVO_ROOT=/path/to/EterCervo /usr/bin/python lex/v22/run.py --once <session-id-prefix> --preview -v
