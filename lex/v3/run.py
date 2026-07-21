@@ -39,6 +39,13 @@ log = logging.getLogger("neural-tape-v3")
 CLASSIFIED_EVENT = "transcript.classified"
 RUN_ONCE_MAX_CHARS = 30000
 
+# Minimum byte growth required before reprocessing an already-classified session.
+# Below this threshold the session is considered stable (closed or idle) and
+# is not reclassified, avoiding duplicate episodes and wasted LLM calls.
+# Legacy markers (pre-fix) lack the `transcript_bytes` field and default to 0,
+# which forces one reclassification to populate the size on first run.
+GROWTH_THRESHOLD_BYTES = 2048
+
 
 @dataclass(frozen=True)
 class RunOnceResult:
@@ -190,11 +197,36 @@ def run_once(
     project = project_mod.ProjectResolver().resolve(project_root)
     storage = storage_mod.Storage(cfg.storage.db_path)
     session_id = transcript_path.stem
-    already_classified = storage.has_event(
-        project.project_id,
-        source_type=CLASSIFIED_EVENT,
-        source_ref=session_id,
-    )
+
+    # Growth-aware idempotency: a session is "already classified" only when an
+    # existing marker is present AND the transcript has not grown beyond the
+    # threshold since the last classification. This prevents sessions that were
+    # classified too early (eps=0 on a short/active snapshot) from being stuck
+    # forever, while keeping closed sessions stable.
+    try:
+        current_size = transcript_path.stat().st_size
+    except OSError:
+        current_size = 0
+    classified_events = [
+        e for e in storage.query_events(
+            project.project_id,
+            source_type=CLASSIFIED_EVENT,
+            limit=5,
+        )
+        if e.get("source_ref") == session_id
+    ]
+    already_classified = False
+    if classified_events:
+        latest = classified_events[0]
+        stored_size = int(latest["payload"].get("transcript_bytes", 0))
+        growth = current_size - stored_size
+        if growth < GROWTH_THRESHOLD_BYTES:
+            already_classified = True
+        else:
+            log.info(
+                "session %s grew by %d bytes since last classification; reprocessing",
+                session_id, growth,
+            )
     episodes_written = 0
     parsed_chars = 0
     processed_chars = 0
@@ -227,24 +259,41 @@ def run_once(
             fallback_notify_interval_hours=cfg.cost.fallback_notify_interval_hours,
         )
         factory = classifier_factory or classifier_mod.ClassifierV3
+        classifier_kwargs: dict = {}
+        # When using the real ClassifierV3 (no test factory), mirror every
+        # persisted episode to the v2.2-style markdown archive so that
+        # pre_load.py / session-context.md see v3 output without changes.
+        if classifier_factory is None:
+            classifier_kwargs["archive_root"] = tape_root / "tape" / "archive"
         classifier = factory(
             config=cfg,
             project=project,
             storage=storage,
             redactor=redactor,
             cost_policy=policy,
+            **classifier_kwargs,
         )
         episodes_written = classifier.classify_and_persist(
             transcript_text,
             session_id,
             project.project_id,
         )
+        # Re-stat after classification in case the transcript grew during the
+        # LLM call (active session). We record the post-classification size so
+        # the next run only reprocesses if NEW content arrived after this point.
+        try:
+            final_size = transcript_path.stat().st_size
+        except OSError:
+            final_size = current_size
         storage.append_event(
             project_id=project.project_id,
             source_type=CLASSIFIED_EVENT,
             source_ref=session_id,
             captured_at=time.time(),
-            payload={"episodes_written": episodes_written},
+            payload={
+                "episodes_written": episodes_written,
+                "transcript_bytes": final_size,
+            },
         )
 
     memory_mod.MemoryPromoter(storage=storage, config=cfg).tick(

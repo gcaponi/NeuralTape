@@ -266,7 +266,7 @@ class PreLoad:
                         workspace = frontmatter.get("workspace", "")
                         proj = self._normalize_project_name(workspace) if workspace else "default"
 
-                    if project != "default" and proj != project:
+                    if project != "default" and proj.lower() != project.lower():
                         continue
 
                     if assistant:

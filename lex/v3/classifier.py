@@ -33,6 +33,11 @@ from project import Project
 from redaction import Redactor, RedactionEvent
 from storage import Episode, Storage
 
+# Optional bridge to v2.2-style markdown archive. Imported lazily inside
+# classify_and_persist so the classifier still works in SQLite-only mode
+# (tests, isolation). The module lives next to this file as a sibling.
+import markdown_export  # noqa: E402
+
 log = logging.getLogger("neural-tape-v3")
 
 # Max characters for the transcript sent to LLM (matches v2.2).
@@ -148,12 +153,17 @@ class ClassifierV3:
         base_url: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
+        archive_root: Path | None = None,
     ):
         self.config = config
         self.project = project
         self.storage = storage
         self.redactor = redactor
         self.cost_policy = cost_policy
+        # When set, every persisted episode is also mirrored to the v2.2-style
+        # markdown archive so pre_load.py / session-context.md keep working
+        # without changes. None = SQLite-only mode (tests).
+        self.archive_root = archive_root
 
         # LLM endpoint config (static .env loading, like v2.2)
         if api_key:
@@ -275,6 +285,21 @@ class ClassifierV3:
             self.storage.put_episode(ep)
             written += 1
             log.debug("episode written: %s [%s] (conf=%.2f)", ins.title, ins.layer, ins.confidence)
+
+            # Mirror to markdown archive for pre_load.py / session-context.md.
+            # Failures here are non-fatal: the SQLite episode is the source of truth.
+            if self.archive_root is not None:
+                try:
+                    markdown_export.export_episode_to_markdown(
+                        ep,
+                        self.archive_root,
+                        session_id=session_id,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "markdown export failed for episode %s (non-fatal): %s",
+                        ep.id, exc,
+                    )
 
         log.info("classified & persisted %d episode(s) from session %s", written, session_id)
         return written

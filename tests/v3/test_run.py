@@ -24,7 +24,6 @@ class FakeClassifier:
         project_id: str,
     ) -> int:
         type(self).calls += 1
-        assert "Attiviamo Neural Tape v3" in transcript_text
         self.storage.put_episode(
             Episode(
                 project_id=project_id,
@@ -122,6 +121,95 @@ def test_run_once_persists_context_and_is_idempotent():
         assert episodes[0].source_ref == "session-123"
         assert (output_dir / "current-focus.json").exists()
         assert (output_dir / "working-set.json").exists()
+
+
+def test_run_once_reprocesses_when_transcript_grows():
+    """Regression: a session classified too early (eps=0 on a short snapshot)
+    must be reprocessed when the transcript grows beyond the threshold.
+
+    Previously the `transcript.classified` marker was written unconditionally,
+    freezing the session forever. The fix stores `transcript_bytes` and only
+    skips when the size has not changed significantly.
+    """
+    FakeClassifier.calls = 0
+    with tempfile.TemporaryDirectory(prefix="nt-v3-run-") as tmp:
+        temp_root = Path(tmp)
+        tape_root = temp_root / "neural-tape"
+        project_root = temp_root / "project"
+        transcript = temp_root / "session-grow.jsonl"
+        tape_root.mkdir()
+        project_root.mkdir()
+        _init_git_repo(project_root)
+
+        project_config = project_root / ".neuraltape" / "project.yaml"
+        project_config.parent.mkdir()
+        project_config.write_text(
+            "project_id: test-grow\n display_name: Test Grow\n",
+            encoding="utf-8",
+        )
+        config_path = tape_root / "config.yaml"
+        config_path.write_text(
+            "v3:\n  enabled: true\n  storage:\n    db_path: tape/v3/neuraltape.db\n",
+            encoding="utf-8",
+        )
+
+        # Initial short snapshot (no real insights yet)
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "user.message",
+                    "timestamp": "2026-07-15T12:00:00Z",
+                    "data": {"content": "Attiviamo Neural Tape v3"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        first = run_once(
+            transcript,
+            project_root,
+            tape_root=tape_root,
+            config_path=config_path,
+            classifier_factory=FakeClassifier,
+        )
+        assert first.skipped is False
+        assert FakeClassifier.calls == 1
+
+        # No growth -> must stay skipped
+        unchanged = run_once(
+            transcript,
+            project_root,
+            tape_root=tape_root,
+            config_path=config_path,
+            classifier_factory=FakeClassifier,
+        )
+        assert unchanged.skipped is True
+        assert FakeClassifier.calls == 1
+
+        # Append a large block of new content (> GROWTH_THRESHOLD_BYTES = 2KB)
+        with open(transcript, "a", encoding="utf-8") as fh:
+            for i in range(200):
+                fh.write(
+                    json.dumps(
+                        {
+                            "type": "assistant.message",
+                            "timestamp": "2026-07-15T13:00:00Z",
+                            "data": {"content": f"Nuova attività session {i:03d} " * 5},
+                        }
+                    )
+                    + "\n"
+                )
+
+        grown = run_once(
+            transcript,
+            project_root,
+            tape_root=tape_root,
+            config_path=config_path,
+            classifier_factory=FakeClassifier,
+        )
+        assert grown.skipped is False, "growing session must be reprocessed"
+        assert FakeClassifier.calls == 2, "classifier must run again after growth"
 
 
 def test_resolve_transcript_rejects_ambiguous_prefix():
