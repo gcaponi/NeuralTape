@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""harvest_sessions — list VS Code transcripts and assign a v3 project_id.
+"""harvest_sessions — list assistant transcripts and assign a v3 project_id.
 
 Deterministic path-based heuristic. NO LLM cost. Used for the v3 exit-criteria
 validation campaign (10 sessions on >=2 projects).
@@ -36,9 +36,15 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+# Direct execution (`python tools/harvest_sessions.py`) puts only tools/ on
+# sys.path; add the repository root so the shared v3 parser/watcher import.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 # Same default base as bootstrap_projects.py.
 DEFAULT_BASE = Path("/run/media/gcaponi/Back-Up")
-DEFAULT_TRANSCRIPTS_GLOB = "~/.config/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts/*.jsonl"
+DEFAULT_TRANSCRIPTS_GLOB = None
 
 # Roots that are NOT project workspaces (exclude from heuristic).
 EXCLUDE_DIRS = {".venv", "node_modules", "__pycache__", ".git"}
@@ -63,56 +69,24 @@ def discover_projects(base: Path) -> dict[str, Path]:
 
 
 def extract_text_from_transcript(path: Path, max_bytes: int = 4_000_000) -> str:
-    """Read transcript JSONL and concatenate all message texts.
+    """Read a Copilot or Codex transcript as classifier-friendly text.
 
     VS Code Copilot transcript schema (verified 2026-07-18):
         {"type": "user.message" | "assistant.message" | ...,
          "data": {"content": "...", "reasoningText": "...", "toolRequests": [...]},
          "id": ..., "timestamp": ..., "parentId": ...}
 
-    We harvest the human-readable text fields (content, reasoningText, plus any
-    string inside toolRequests[].input) so the project-path heuristic has enough
-    signal. Bounded read so we don't choke on the 4MB file.
+    Parsing is shared with the live v3 classifier so source support cannot drift.
+    The full file is parsed to preserve Codex ``session_meta.cwd`` near the
+    beginning; high-volume fields are bounded by the parser itself.
     """
-    parts: list[str] = []
-    size = path.stat().st_size
-    with path.open("r", encoding="utf-8", errors="replace") as f:
-        if size > max_bytes:
-            try:
-                f.seek(size - max_bytes)
-                f.readline()  # discard partial line
-            except OSError:
-                pass
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            data = obj.get("data") or {}
-            if not isinstance(data, dict):
-                continue
-            # Top-level text fields.
-            for key in ("content", "reasoningText", "text", "message"):
-                v = data.get(key)
-                if isinstance(v, str):
-                    parts.append(v)
-            # Tool requests: their input often contains file paths.
-            tool_requests = data.get("toolRequests") or []
-            if isinstance(tool_requests, list):
-                for tr in tool_requests:
-                    if not isinstance(tr, dict):
-                        continue
-                    inp = tr.get("input") or tr.get("arguments")
-                    if isinstance(inp, dict):
-                        for v in inp.values():
-                            if isinstance(v, str):
-                                parts.append(v)
-                    elif isinstance(inp, str):
-                        parts.append(inp)
-    return "\n".join(parts)
+    from lex.v3.transcript_parser import TranscriptParser
+
+    # The parser already truncates each high-volume field. Keeping the whole
+    # JSONL preserves Codex session_meta.cwd, which is normally near the start.
+    # max_bytes remains in the signature for CLI/API compatibility.
+    _ = max_bytes
+    return TranscriptParser().parse_delta(path)
 
 
 def score_projects(text: str, projects: dict[str, Path]) -> dict[str, int]:
@@ -150,7 +124,7 @@ def assign_project(scores: dict[str, int]) -> str | None:
 
 
 def harvest(
-    transcripts_glob: str,
+    transcripts_glob: str | None,
     projects: dict[str, Path],
     *,
     min_bytes: int = 0,
@@ -158,11 +132,16 @@ def harvest(
 ) -> list[dict]:
     """Discover, score, and return the validation plan."""
     # Expand and deduplicate transcripts.
-    paths = sorted(
-        Path(p).expanduser().resolve()
-        for p in _glob(transcripts_glob)
-        if Path(p).is_file()
-    )
+    if transcripts_glob:
+        raw_paths = [Path(p) for p in _glob(transcripts_glob)]
+    else:
+        from lex.v3.transcript_watcher import TranscriptWatcher
+        raw_paths = [
+            path for _, path in TranscriptWatcher().find_all_transcripts(
+                max_age_minutes=10 * 365 * 24 * 60,
+            )
+        ]
+    paths = sorted({p.expanduser().resolve() for p in raw_paths if p.is_file()})
     if min_bytes > 0:
         paths = [p for p in paths if p.stat().st_size >= min_bytes]
     # Most recent first (validation campaign cares about recent sessions).
@@ -203,8 +182,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base", default=str(DEFAULT_BASE),
                     help="base dir containing workspace folders (default: %(default)s)")
-    ap.add_argument("--glob", default=DEFAULT_TRANSCRIPTS_GLOB,
-                    help="glob for transcripts (default: %(default)s)")
+    ap.add_argument(
+        "--glob",
+        default=DEFAULT_TRANSCRIPTS_GLOB,
+        help="optional transcript glob; default discovers VS Code Copilot and Codex stores",
+    )
     ap.add_argument("--min-bytes", type=int, default=50_000,
                     help="skip tiny transcripts (default: 50KB)")
     ap.add_argument("--limit", type=int, default=None,

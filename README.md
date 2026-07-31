@@ -2,7 +2,7 @@
 
 Automatic memory layer for VS Code Copilot sessions.
 
-Neural Tape reads the JSONL transcripts that VS Code already writes to disk, waits until the session becomes idle, classifies the useful long-term insights with an OpenAI-compatible LLM, then persists them as layered episodes in SQLite (`tape/v3/neuraltape.db`) with a markdown mirror in `tape/archive/`. `_Lex/memory.md` is manual curated memory only (Lex writes it via `tools/lex-capture.py` in EterCervo).
+Neural Tape reads the JSONL transcripts written by VS Code GitHub Copilot and Codex, waits until the session becomes idle, classifies the useful long-term insights with an OpenAI-compatible LLM, then persists them as layered episodes in SQLite (`tape/v3/neuraltape.db`) with a markdown mirror in `tape/archive/`. `_Lex/memory.md` is manual curated memory only (Lex writes it via `tools/lex-capture.py` in EterCervo).
 
 ## Version status
 
@@ -30,7 +30,7 @@ Previous versions watched assistant-specific CLI logs from Kimi Code, OpenCode, 
 The flow is fully automatic:
 
 ```text
-VS Code transcript -> 5-minute user timer -> idle detection -> DeepSeek classifier -> memory.md + tape/archive
+Copilot/Codex transcript -> 5-minute user timer -> idle detection -> DeepSeek classifier -> SQLite + tape/archive
 ```
 
 ## Live components (v3, active since 2026-07-20)
@@ -39,6 +39,8 @@ VS Code transcript -> 5-minute user timer -> idle detection -> DeepSeek classifi
 lex/pre_load.py             Startup context generator (reads tape/archive + _Lex/memory.md)
 lex/v3/run.py               One-shot orchestrator (selfcheck, status, run_once)
 lex/v3/run-cron-v3.sh       systemd/cron-safe wrapper invoked by neural-tape-v3.timer
+lex/v3/transcript_watcher.py Discovers Copilot and Codex JSONL stores
+lex/v3/transcript_parser.py  Normalizes both schemas without system/tool-output ingestion
 lex/v3/classifier.py        LLM classifier: layered insights (working/episodic/semantic) + confidence
 lex/v3/storage.py           SQLite persistence (tape/v3/neuraltape.db)
 lex/v3/markdown_export.py   Mirrors each episode to tape/archive/<category>/
@@ -51,6 +53,10 @@ lex/v3/events.py            EventBus minimale (transcript + git.commit)
 lex/v3/redaction.py         Secret redaction before LLM payload
 lex/v3/cost.py              Cost/fallback policy for LLM calls
 ```
+
+Classifier output is evidence-gated: every insight must include an exact quote
+found in the normalized transcript. Missing or fabricated evidence is rejected
+before persistence; empty insight sets are a valid result.
 
 The v2.2 modules under `lex/v22/` are retained read-only for rollback
 (`tools/rollback_to_v22.sh`); they are not part of the active flow.

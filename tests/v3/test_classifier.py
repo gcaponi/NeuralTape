@@ -101,12 +101,14 @@ def test_classifier_insight_from_dict():
         "implication": "better query capabilities",
         "layer": "semantic",
         "confidence": 0.95,
+        "evidence": "choose sqlite over json storage",
     }
     ins = ClassifierInsight.from_dict(data)
     assert ins.category == "decision"
     assert ins.title == "choose sqlite over json"
     assert ins.layer == "semantic"
     assert ins.confidence == 0.95
+    assert ins.evidence == "choose sqlite over json storage"
 
 
 def test_classifier_insight_from_dict_missing_fields():
@@ -156,6 +158,64 @@ def test_classifier_processes_newest_chunk_first():
     assert "OLD-CONTEXT" in prompts[1]
 
 
+def test_classifier_rejects_missing_or_fabricated_evidence():
+    classifier = _build_classifier()
+    responses = iter(
+        [
+            {
+                "choices": [{"message": {"content": json.dumps({"insights": [{
+                    "category": "tool",
+                    "title": "Invented schema detail",
+                    "context": "Codex uses payload.messages",
+                    "implication": "Parse that field",
+                    "layer": "episodic",
+                    "confidence": 1.0,
+                    "evidence": "payload.messages is the Codex schema",
+                }]})}}]
+            },
+            {
+                "choices": [{"message": {"content": json.dumps({"insights": [{
+                    "category": "decision",
+                    "title": "Missing evidence",
+                    "context": "A decision was made",
+                    "implication": "Remember it",
+                    "layer": "episodic",
+                    "confidence": 0.9,
+                    "evidence": "",
+                }]})}}]
+            },
+        ]
+    )
+    classifier._chat_completion = lambda _prompt: next(responses)
+
+    assert classifier.classify("Actual transcript says only this", "session-false") == []
+    assert classifier.classify("Actual transcript says only this", "session-empty") == []
+
+
+def test_classifier_accepts_exact_whitespace_normalized_evidence():
+    classifier = _build_classifier()
+    content = json.dumps({"insights": [{
+        "category": "decision",
+        "title": "Pilot moved to September",
+        "context": "The user postponed the pilot",
+        "implication": "Resume in September",
+        "layer": "episodic",
+        "confidence": 1.0,
+        "evidence": "Il pilot sara' per settembre",
+    }]})
+    classifier._chat_completion = lambda _prompt: {
+        "choices": [{"message": {"content": content}}]
+    }
+
+    insights = classifier.classify(
+        "Il pilot   sara' per\nsettembre, non oggi.",
+        "session-grounded",
+    )
+
+    assert len(insights) == 1
+    assert insights[0].title == "Pilot moved to September"
+
+
 def test_classifier_raises_when_llm_call_fails():
     classifier = _build_classifier()
 
@@ -173,6 +233,12 @@ def test_classifier_raises_when_llm_call_fails():
 
 
 def test_classifier_prompt_requires_evidence_for_preferences_and_errors():
-    assert "preferenza esplicita dell'utente" in CLASSIFIER_PROMPT
-    assert "nome esatto dell'errore" in CLASSIFIER_PROMPT
-    assert "non reinterpretarlo" in CLASSIFIER_PROMPT
+    assert "explicit user preference" in CLASSIFIER_PROMPT
+    assert "exact observed error name" in CLASSIFIER_PROMPT
+    assert "do not reinterpret it" in CLASSIFIER_PROMPT
+    assert "an EXACT 5-25 word quote" in CLASSIFIER_PROMPT
+    assert "Empty results are valid" in CLASSIFIER_PROMPT
+    assert "Do not invent dates, paths" in CLASSIFIER_PROMPT
+    assert "Do not turn a `[LEX]` proposal" in CLASSIFIER_PROMPT
+    assert "require evidence from `[USER]`" in CLASSIFIER_PROMPT
+    assert "<think>" in CLASSIFIER_PROMPT

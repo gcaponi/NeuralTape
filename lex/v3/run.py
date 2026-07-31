@@ -128,10 +128,7 @@ def resolve_transcript(
         return direct_path.resolve()
 
     if watcher is None:
-        watcher_mod = _load_from_path(
-            "nt_v22.watcher",
-            TAPE_ROOT / "lex" / "v22" / "watcher.py",
-        )
+        watcher_mod = _load_sibling("transcript_watcher")
         watcher = watcher_mod.TranscriptWatcher()
 
     assert watcher is not None
@@ -185,10 +182,7 @@ def run_once(
     focus_mod = _load_sibling("focus")
     workset_mod = _load_sibling("workset")
     git_mod = _load_from_path("nt_v3.git_adapter", THIS_DIR / "adapters" / "git.py")
-    parser_mod = _load_from_path(
-        "nt_v22.transcript_parser",
-        TAPE_ROOT / "lex" / "v22" / "transcript_parser.py",
-    )
+    parser_mod = _load_sibling("transcript_parser")
 
     cfg = config_mod.load(tape_root, config_path=config_path)
     if not cfg.enabled:

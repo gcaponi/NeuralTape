@@ -48,48 +48,56 @@ MAX_TRANSCRIPT_CHARS = 30000
 
 # The prompt template. {redacted_summary} is filled with the redaction summary
 # (or empty if clean). {transcript} is the actual content.
-CLASSIFIER_PROMPT = """Sei Lex, l'agente AI senior developer di Guglielmo. Hai appena concluso una sessione di lavoro in VS Code.
+CLASSIFIER_PROMPT = """You are Lex, Guglielmo's senior developer AI agent. You have just completed a work session.
 
 {redacted_summary}
 
-Il tuo compito: estrarre insight strutturati per il sistema di memoria a layer di NeuralTape v3.
+Your task is to extract structured insights for NeuralTape v3's layered memory system.
 
-Categorie:
-- "pattern": flussi di lavoro ricorrenti di Guglielmo, abitudini, modi di operare
-- "decision": decisioni architetturali o strategiche (perché si è scelto X e non Y)
-- "anti-pattern": cose che falliscono, vengono respinte, o si rivelano errori
-- "preference": preferenze di Guglielmo (linguaggio, tool, approccio)
-- "tool": quirk di API/framework/librerie scoperti (vincoli reali, signature corrette, limiti)
-- "warning": errori critici, insidie, situazioni da evitare
+Categories:
+- "pattern": recurring workflows, habits, or operating methods
+- "decision": architectural or strategic decisions, including their rationale
+- "anti-pattern": approaches that failed, were rejected, or proved incorrect
+- "preference": Guglielmo's explicit preferences about language, tools, or approach
+- "tool": observed API/framework/library quirks, real constraints, signatures, or limits
+- "warning": critical errors, traps, or situations to avoid
 
-Layer (vitalità):
-- "working": roba utile ORA, riferimenti immediati, dettagli di sessione. Vita: minuti-ore.
-- "episodic": eventi importanti, bug fix non banali, scoperte API. Vita: settimane.
-- "semantic": pattern ricorrenti, preferenze stabili, decisioni architetturali con rationale. Vita: mesi-permanente.
+Layers:
+- "working": immediately useful references and session details; lifetime minutes to hours
+- "episodic": important events, non-trivial fixes, and API discoveries; lifetime weeks
+- "semantic": recurring patterns, stable preferences, and architectural decisions with rationale; lifetime months or permanent
 
-Per ogni insight degno, restituisci:
-- "category": una delle 6 sopra
-- "title": titolo breve 5-12 parole
-- "context": 1 riga — quando/perché è emerso
-- "implication": 1 riga — cosa cambia per le future raccomandazioni
+For each worthy insight return:
+- "category": one of the six categories above
+- "title": a concise 5-12 word title
+- "context": one line explaining when and why it emerged
+- "implication": one line explaining what changes for future recommendations
 - "layer": "working" | "episodic" | "semantic"
-- "confidence": float 0.0-1.0 (quanto sei sicuro che questo insight sia vero e utile)
+- "confidence": float 0.0-1.0 representing certainty that the insight is true and useful
+- "evidence": an EXACT 5-25 word quote copied from the transcript
 
-REGOLE:
-- Massimo 8 insight (meglio pochi e giusti).
-- Se la sessione è routine senza apprendimenti reali, restituisci {{"insights": []}}.
-- Non inventare: basati SOLO sul contenuto della trascrizione.
-- Usa "preference" solo quando compare una preferenza esplicita dell'utente;
-    una scelta implementativa o architetturale e' una "decision".
-- Usa "semantic" solo se la trascrizione dimostra ricorrenza o stabilita';
-    un evento o una decisione osservati una sola volta sono "episodic".
-- Per failure ed eccezioni conserva il nome esatto dell'errore osservato e non reinterpretarlo.
-- Rispondi SOLO con JSON valido, nessun markdown, nessun commento.
+RULES:
+- Return at most 8 insights; prefer a few correct insights.
+- Empty results are valid. If the session is routine or you cannot quote exact
+    textual evidence, return {{"insights": []}}.
+- Do not invent dates, paths, event names, JSON types, errors, or configuration.
+    Every fact in title/context must be supported by the "evidence" field.
+- "evidence" must occur literally in the transcript. Paraphrases,
+    reconstructions, and deductions are not evidence.
+- Use "preference" only for an explicit user preference. An implementation or
+    architectural choice is a "decision".
+- Do not turn a `[LEX]` proposal, recommendation, or inference into a confirmed
+    `[USER]` decision. User intent and scheduling require evidence from `[USER]`.
+- Use "semantic" only when the transcript demonstrates recurrence or stability.
+    A one-time event or decision is "episodic".
+- For failures and exceptions, preserve the exact observed error name and do not reinterpret it.
+- Do not include `<think>` tags or reasoning outside the JSON object.
+- Return valid JSON only, without Markdown or commentary.
 
-Formato output:
-{{"insights": [{{"category":"...","title":"...","context":"...","implication":"...","layer":"...","confidence":0.0}}]}}
+Output format:
+{{"insights": [{{"category":"...","title":"...","context":"...","implication":"...","layer":"...","confidence":0.0,"evidence":"exact quote"}}]}}
 
-Trascrizione:
+Transcript:
 ---
 {transcript}
 ---"""
@@ -111,6 +119,7 @@ class ClassifierInsight:
     implication: str
     layer: str          # "working" | "episodic" | "semantic"
     confidence: float
+    evidence: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> ClassifierInsight:
@@ -121,9 +130,10 @@ class ClassifierInsight:
             implication=str(d.get("implication", "")),
             layer=str(d.get("layer", "working")),
             confidence=float(d.get("confidence", 0.0)),
+            evidence=str(d.get("evidence", "")),
         )
 
-    def validate(self) -> list[str]:
+    def validate(self, evidence_source: str | None = None) -> list[str]:
         errors = []
         if self.category not in {"pattern", "decision", "anti-pattern", "preference", "tool", "warning"}:
             errors.append(f"invalid category: {self.category!r}")
@@ -133,6 +143,15 @@ class ClassifierInsight:
             errors.append(f"invalid layer: {self.layer!r}")
         if not (0.0 <= self.confidence <= 1.0):
             errors.append(f"confidence out of range: {self.confidence}")
+        if evidence_source is not None:
+            normalized_evidence = " ".join(self.evidence.casefold().split())
+            normalized_source = " ".join(evidence_source.casefold().split())
+            if not normalized_evidence:
+                errors.append("evidence is empty")
+            elif not 5 <= len(self.evidence.split()) <= 25:
+                errors.append("evidence must contain 5-25 words")
+            elif normalized_evidence not in normalized_source:
+                errors.append("evidence is not an exact transcript excerpt")
         return errors
 
 
@@ -246,7 +265,7 @@ class ClassifierV3:
                     log.warning("skipping malformed insight: %s", e)
                     continue
 
-                errs = ins.validate()
+                errs = ins.validate(evidence_source=redacted)
                 if errs:
                     log.warning("skipping invalid insight: %s", "; ".join(errs))
                     continue
@@ -284,6 +303,7 @@ class ClassifierV3:
                 title=ins.title,
                 body=f"{ins.context}\n\n{ins.implication}",
                 confidence=ins.confidence,
+                raw_payload={"session_id": session_id, "evidence": ins.evidence},
             )
             self.storage.put_episode(ep)
             written += 1
@@ -329,7 +349,10 @@ class ClassifierV3:
     def _redaction_comment(self, summary: str) -> str:
         if summary.startswith("redaction: clean"):
             return ""
-        return f"(Nota: nel transcript qui sotto alcuni secret sono stati sostituiti con [REDACTED:...]. Ignora le sostituzioni, sono solo artefatti di sicurezza. Riepilogo: {summary})"
+        return (
+            "(Note: secrets in the transcript were replaced with [REDACTED:...]. "
+            f"Treat these replacements only as security artifacts. Summary: {summary})"
+        )
 
     @staticmethod
     def _estimate_tokens(prompt: str, response: dict) -> int:

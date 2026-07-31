@@ -1,0 +1,211 @@
+"""Parse supported assistant transcripts into classifier-friendly text.
+
+Neural Tape v3 accepts both the legacy VS Code GitHub Copilot JSONL schema and
+the Codex rollout schema stored under ``~/.codex/sessions``.  Only user,
+assistant, reasoning-summary, and tool-call data is retained; system/developer
+instructions and tool outputs are intentionally excluded.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+MAX_REASONING = 2000
+MAX_CONTENT = 3000
+MAX_TOOL_ARGS = 200
+
+
+class TranscriptParser:
+    """Parse a transcript delta from either supported JSONL schema."""
+
+    def parse_delta(self, transcript: Path, offset: int = 0) -> str:
+        lines: list[str] = []
+        with Path(transcript).open("rb") as stream:
+            stream.seek(offset)
+            for raw in stream:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                formatted = self._format_event(event)
+                if formatted:
+                    lines.append(formatted)
+        return "\n".join(lines)
+
+    def parse_delta_structured(self, transcript: Path, offset: int = 0) -> dict:
+        counts = {
+            "user": 0,
+            "assistant": 0,
+            "reasoning": 0,
+            "tool_calls": 0,
+            "total_events": 0,
+        }
+        with Path(transcript).open("rb") as stream:
+            stream.seek(offset)
+            for raw in stream:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                counts["total_events"] += 1
+                kind = self._event_kind(event)
+                if kind in counts:
+                    counts[kind] += 1
+        return counts
+
+    def _event_kind(self, event: dict) -> str | None:
+        etype = event.get("type")
+        if etype == "user.message":
+            return "user"
+        if etype == "assistant.message":
+            return "assistant"
+        if etype in ("tool.execution_start", "tool.execution_complete"):
+            return "tool_calls"
+
+        payload = event.get("payload") or {}
+        if etype != "response_item" or not isinstance(payload, dict):
+            return None
+        ptype = payload.get("type")
+        if ptype == "message" and payload.get("role") == "user":
+            return "user"
+        if ptype == "message" and payload.get("role") == "assistant":
+            return "assistant"
+        if ptype == "reasoning" and self._codex_reasoning(payload):
+            return "reasoning"
+        if ptype in ("function_call", "custom_tool_call"):
+            return "tool_calls"
+        return None
+
+    def _format_event(self, event: dict) -> str | None:
+        etype = event.get("type")
+        ts = str(event.get("timestamp", ""))[:19]
+
+        if etype == "session.start":
+            return self._legacy_session(event.get("data", {}), ts)
+        if etype == "user.message":
+            return self._legacy_user(event.get("data", {}), ts)
+        if etype == "assistant.message":
+            return self._legacy_assistant(event.get("data", {}), ts)
+        if etype in ("tool.execution_start", "tool.execution_complete"):
+            return self._legacy_tool(event, event.get("data", {}), ts)
+
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            return None
+        if etype == "session_meta":
+            return self._codex_session(payload, ts)
+        if etype != "response_item":
+            return None
+
+        ptype = payload.get("type")
+        if ptype == "message":
+            return self._codex_message(payload, ts)
+        if ptype == "reasoning":
+            reasoning = self._codex_reasoning(payload)
+            return f"[{ts}] [LEX reasoning]\n{reasoning[:MAX_REASONING]}" if reasoning else None
+        if ptype in ("function_call", "custom_tool_call"):
+            return self._codex_tool(payload, ts)
+        return None
+
+    @staticmethod
+    def _legacy_session(data: dict, ts: str) -> str:
+        if not isinstance(data, dict):
+            return ""
+        parts = [f"[{ts}] [SESSION START]"]
+        if data.get("model"):
+            parts.append(f"model: {data['model']}")
+        if data.get("producer"):
+            parts.append(f"producer: {data['producer']}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _legacy_user(data, ts: str) -> str:
+        content = data.get("content", "") if isinstance(data, dict) else str(data)
+        return f"[{ts}] [USER]\n{content[:MAX_CONTENT]}" if content else ""
+
+    @staticmethod
+    def _legacy_assistant(data: dict, ts: str) -> str:
+        if not isinstance(data, dict):
+            return ""
+        parts: list[str] = []
+        reasoning = data.get("reasoningText", "")
+        content = data.get("content", "")
+        if reasoning:
+            parts.append(f"[{ts}] [LEX reasoning]\n{reasoning[:MAX_REASONING]}")
+        if content:
+            parts.append(f"[{ts}] [LEX]\n{content[:MAX_CONTENT]}")
+        return "\n".join(parts)
+
+    def _legacy_tool(self, event: dict, data: dict, ts: str) -> str:
+        if not isinstance(data, dict):
+            return ""
+        name = data.get("toolName") or data.get("name", "?")
+        marker = "✓" if str(event.get("type", "")).endswith("complete") else "→"
+        return f"[{ts}] [TOOL {marker} {name}] {self._compact_args(data.get('arguments', {}))}"
+
+    @staticmethod
+    def _codex_session(payload: dict, ts: str) -> str:
+        parts = [f"[{ts}] [SESSION START]"]
+        if payload.get("source"):
+            parts.append(f"source: {payload['source']}")
+        if payload.get("cwd"):
+            parts.append(f"cwd: {payload['cwd']}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _content_text(payload: dict) -> str:
+        parts: list[str] = []
+        for item in payload.get("content") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") not in ("input_text", "output_text", "text"):
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+        return "\n".join(parts)
+
+    def _codex_message(self, payload: dict, ts: str) -> str | None:
+        role = payload.get("role")
+        if role not in ("user", "assistant"):
+            return None
+        content = self._content_text(payload)
+        if not content:
+            return None
+        marker = "USER" if role == "user" else "LEX"
+        return f"[{ts}] [{marker}]\n{content[:MAX_CONTENT]}"
+
+    @staticmethod
+    def _codex_reasoning(payload: dict) -> str:
+        parts: list[str] = []
+        for item in payload.get("summary") or []:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+            elif isinstance(item, str) and item:
+                parts.append(item)
+        return "\n".join(parts)
+
+    def _codex_tool(self, payload: dict, ts: str) -> str:
+        name = payload.get("name", "?")
+        args = payload.get("arguments")
+        if args is None:
+            args = payload.get("input", {})
+        return f"[{ts}] [TOOL → {name}] {self._compact_args(args)}"
+
+    @staticmethod
+    def _compact_args(args) -> str:
+        try:
+            compact = json.dumps(args, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            compact = str(args)
+        return compact if len(compact) <= MAX_TOOL_ARGS else compact[:MAX_TOOL_ARGS] + "…"

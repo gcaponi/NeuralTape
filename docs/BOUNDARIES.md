@@ -52,7 +52,7 @@ journalctl --user -u neural-tape-v3.service -n 40 --no-pager
 
 ```text
 VS Code Chat session
-    -> transcript JSONL on disk
+    -> Copilot JSONL or Codex rollout JSONL on disk
     -> neural-tape-v3.timer every 5 minutes (run-cron-v3.sh)
     -> idle/growth detection (skip already-classified, unchanged transcripts)
     -> v3 classifier extracts layered insights (working/episodic/semantic + confidence)

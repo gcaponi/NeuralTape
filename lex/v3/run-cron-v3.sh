@@ -48,36 +48,30 @@ try:
 except (json.JSONDecodeError, IndexError, subprocess.SubprocessError):
     pass  # fall back to tape_root below
 
-# Collect candidate transcripts across all VS Code workspace folders.
+# Collect candidate transcripts across VS Code Copilot and Codex stores.
 candidates = []
 now = time.time()
-for ws in Path.home().glob(".config/Code/User/workspaceStorage/*"):
-    tdir = ws / "GitHub.copilot-chat" / "transcripts"
-    if not tdir.is_dir():
+from lex.v3.transcript_watcher import TranscriptWatcher
+
+watcher = TranscriptWatcher()
+for mtime, tp in watcher.find_all_transcripts(max_age_minutes=MAX_AGE_DAYS * 24 * 60):
+    try:
+        st = tp.stat()
+    except OSError:
         continue
-    for tp in tdir.glob("*.jsonl"):
-        try:
-            st = tp.stat()
-        except OSError:
-            continue
-        age_days = (now - st.st_mtime) / 86400
-        if age_days > MAX_AGE_DAYS:
-            continue
-        if st.st_size < MIN_BYTES:
-            continue
-        if (now - st.st_mtime) < ACTIVE_THRESHOLD_SEC:
-            continue  # session is live, defer until idle
-        candidates.append((st.st_mtime, st.st_size, tp))
+    if st.st_size < MIN_BYTES:
+        continue
+    if (now - st.st_mtime) < ACTIVE_THRESHOLD_SEC:
+        continue  # session is live, defer until idle
+    candidates.append((mtime, st.st_size, tp))
 
 if not candidates:
     print("[v3-cron] no candidate transcripts (age/size/active filters)")
     sys.exit(0)
 
-# Process newest first, capped at MAX_RUNS_PER_TICK per tick.
-# Idempotency inside run_once means already-classified sessions return
-# skipped=True with eps=0 and cost no LLM call.
+# Process newest first. The cap applies to classifications, not candidates:
+# already-classified sessions must not starve older unprocessed sessions.
 candidates.sort(reverse=True)
-candidates = candidates[:MAX_RUNS_PER_TICK]
 
 print(f"[v3-cron] {len(candidates)} candidate(s)")
 
@@ -88,6 +82,8 @@ from lex.v3.run import run_once
 total_eps = 0
 processed = 0
 for mtime, size, tp in candidates:
+    if processed >= MAX_RUNS_PER_TICK:
+        break
     sid = tp.stem
     plan_entry = plan_by_session.get(sid) or {}
     project_root = Path(plan_entry.get("project_root", tape_root))
