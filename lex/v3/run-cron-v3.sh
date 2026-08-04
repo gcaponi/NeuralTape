@@ -84,7 +84,7 @@ processed = 0
 for mtime, size, tp in candidates:
     if processed >= MAX_RUNS_PER_TICK:
         break
-    sid = tp.stem
+    sid = TranscriptWatcher.get_session_id(tp)
     plan_entry = plan_by_session.get(sid) or {}
     project_root = Path(plan_entry.get("project_root", tape_root))
     project_id_hint = plan_entry.get("project_id", "<unknown>")

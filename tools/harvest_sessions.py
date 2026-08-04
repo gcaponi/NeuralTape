@@ -132,10 +132,10 @@ def harvest(
 ) -> list[dict]:
     """Discover, score, and return the validation plan."""
     # Expand and deduplicate transcripts.
+    from lex.v3.transcript_watcher import TranscriptWatcher
     if transcripts_glob:
         raw_paths = [Path(p) for p in _glob(transcripts_glob)]
     else:
-        from lex.v3.transcript_watcher import TranscriptWatcher
         raw_paths = [
             path for _, path in TranscriptWatcher().find_all_transcripts(
                 max_age_minutes=10 * 365 * 24 * 60,
@@ -155,7 +155,7 @@ def harvest(
         scores = score_projects(text, projects)
         winner = assign_project(scores)
         entry = {
-            "session_id": path.stem,
+            "session_id": TranscriptWatcher.get_session_id(path),
             "transcript_path": str(path),
             "project_id": winner,
             "project_root": str(projects[winner]) if winner else None,

@@ -1,8 +1,9 @@
-"""Discover recent transcripts produced by VS Code Copilot and Codex."""
+"""Discover recent transcripts produced by VS Code Copilot, Codex and Kimi Code."""
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -10,22 +11,30 @@ from pathlib import Path
 class TranscriptWatcher:
     """Find assistant transcripts across every supported local store."""
 
+    # Kimi Code workspace dirs: wd_<workspace-folder-name>_<12-hex-hash>
+    _KIMI_WD_RE = re.compile(r"^wd_(?P<label>.+)_[0-9a-f]{12}$")
+
     def __init__(
         self,
         *,
         home: Path | None = None,
         vscode_user: Path | None = None,
         codex_home: Path | None = None,
+        kimi_home: Path | None = None,
     ):
         self.home = (home or Path.home()).expanduser()
         self.vscode_user = vscode_user or self.home / ".config" / "Code" / "User"
         self.codex_home = codex_home or self.home / ".codex"
+        self.kimi_home = kimi_home or self.home / ".kimi-code"
 
     def _paths(self):
         workspace_storage = self.vscode_user / "workspaceStorage"
         yield from workspace_storage.glob("*/GitHub.copilot-chat/transcripts/*.jsonl")
         yield from (self.codex_home / "sessions").glob("**/*.jsonl")
         yield from (self.codex_home / "archived_sessions").glob("*.jsonl")
+        # Kimi Code: only the main agent wire. Subagent wires (agents/agent-N)
+        # duplicate the same session and would share its session id.
+        yield from (self.kimi_home / "sessions").glob("*/*/agents/main/wire.jsonl")
 
     def find_active_transcript(self, max_age_minutes: int = 60) -> Path | None:
         candidates = self.find_all_transcripts(max_age_minutes=max_age_minutes)
@@ -50,6 +59,13 @@ class TranscriptWatcher:
             cwd = self._codex_cwd(transcript)
             return Path(cwd).name if cwd else "unknown"
 
+        kimi_sessions = (self.kimi_home / "sessions").resolve()
+        if kimi_sessions in transcript.parents:
+            for parent in transcript.parents:
+                if parent.parent == kimi_sessions:
+                    return self._kimi_workspace_label(parent.name)
+            return "unknown"
+
         hash_dir = transcript.parent.parent.parent
         workspace_json = hash_dir / "workspace.json"
         if workspace_json.exists():
@@ -61,6 +77,11 @@ class TranscriptWatcher:
             except (json.JSONDecodeError, OSError):
                 pass
         return hash_dir.name[:8]
+
+    @classmethod
+    def _kimi_workspace_label(cls, dirname: str) -> str:
+        match = cls._KIMI_WD_RE.match(dirname)
+        return match.group("label") if match else dirname
 
     @staticmethod
     def _codex_cwd(transcript: Path) -> str | None:
@@ -83,4 +104,12 @@ class TranscriptWatcher:
 
     @staticmethod
     def get_session_id(transcript: Path) -> str:
-        return Path(transcript).stem
+        path = Path(transcript)
+        if path.name == "wire.jsonl":
+            # Kimi Code layout: sessions/wd_*/session_<uuid>/agents/<agent>/wire.jsonl
+            # The file stem ("wire") is identical across sessions; the unique id
+            # lives in the session_<uuid> directory name.
+            for parent in path.parents:
+                if parent.name.startswith("session_"):
+                    return parent.name
+        return path.stem

@@ -1,14 +1,17 @@
 """Parse supported assistant transcripts into classifier-friendly text.
 
-Neural Tape v3 accepts both the legacy VS Code GitHub Copilot JSONL schema and
-the Codex rollout schema stored under ``~/.codex/sessions``.  Only user,
+Neural Tape v3 accepts three JSONL schemas: the legacy VS Code GitHub Copilot
+schema, the Codex rollout schema stored under ``~/.codex/sessions``, and the
+Kimi Code wire schema (protocol 1.5) stored under
+``~/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl``.  Only user,
 assistant, reasoning-summary, and tool-call data is retained; system/developer
-instructions and tool outputs are intentionally excluded.
+instructions, harness reminders and tool outputs are intentionally excluded.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 
@@ -18,7 +21,7 @@ MAX_TOOL_ARGS = 200
 
 
 class TranscriptParser:
-    """Parse a transcript delta from either supported JSONL schema."""
+    """Parse a transcript delta from any supported JSONL schema."""
 
     def parse_delta(self, transcript: Path, offset: int = 0) -> str:
         lines: list[str] = []
@@ -70,6 +73,22 @@ class TranscriptParser:
         if etype in ("tool.execution_start", "tool.execution_complete"):
             return "tool_calls"
 
+        if etype == "turn.prompt":
+            return "user" if self._kimi_prompt_text(event) else None
+        if etype == "context.append_loop_event":
+            sub = event.get("event") or {}
+            stype = sub.get("type")
+            if stype == "content.part":
+                ptype = (sub.get("part") or {}).get("type")
+                if ptype == "think":
+                    return "reasoning"
+                if ptype == "text":
+                    return "assistant"
+                return None
+            if stype == "tool.call":
+                return "tool_calls"
+            return None
+
         payload = event.get("payload") or {}
         if etype != "response_item" or not isinstance(payload, dict):
             return None
@@ -86,7 +105,7 @@ class TranscriptParser:
 
     def _format_event(self, event: dict) -> str | None:
         etype = event.get("type")
-        ts = str(event.get("timestamp", ""))[:19]
+        ts = self._event_ts(event)
 
         if etype == "session.start":
             return self._legacy_session(event.get("data", {}), ts)
@@ -96,6 +115,17 @@ class TranscriptParser:
             return self._legacy_assistant(event.get("data", {}), ts)
         if etype in ("tool.execution_start", "tool.execution_complete"):
             return self._legacy_tool(event, event.get("data", {}), ts)
+
+        # Kimi Code wire schema (protocol 1.5). ``context.append_message``
+        # user entries carry harness-injected reminders, not the user voice:
+        # they are excluded on purpose; real prompts arrive via ``turn.prompt``.
+        if etype == "metadata":
+            return self._kimi_session(event, ts)
+        if etype == "turn.prompt":
+            text = self._kimi_prompt_text(event)
+            return f"[{ts}] [USER]\n{text[:MAX_CONTENT]}" if text else None
+        if etype == "context.append_loop_event":
+            return self._kimi_loop_event(event, ts)
 
         payload = event.get("payload") or {}
         if not isinstance(payload, dict):
@@ -114,6 +144,16 @@ class TranscriptParser:
         if ptype in ("function_call", "custom_tool_call"):
             return self._codex_tool(payload, ts)
         return None
+
+    @staticmethod
+    def _event_ts(event: dict) -> str:
+        ts = event.get("timestamp")
+        if ts:
+            return str(ts)[:19]
+        epoch_ms = event.get("time", event.get("created_at"))
+        if isinstance(epoch_ms, (int, float)):
+            return datetime.fromtimestamp(epoch_ms / 1000).isoformat(timespec="seconds")
+        return ""
 
     @staticmethod
     def _legacy_session(data: dict, ts: str) -> str:
@@ -201,6 +241,54 @@ class TranscriptParser:
         if args is None:
             args = payload.get("input", {})
         return f"[{ts}] [TOOL → {name}] {self._compact_args(args)}"
+
+    # ---- Kimi Code (wire protocol 1.5) ----------------------------------
+
+    @staticmethod
+    def _kimi_session(event: dict, ts: str) -> str:
+        parts = [f"[{ts}] [SESSION START]", "source: kimi-code"]
+        if event.get("protocol_version"):
+            parts.append(f"protocol: {event['protocol_version']}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _kimi_prompt_text(event: dict) -> str:
+        inp = event.get("input")
+        if isinstance(inp, str):
+            return inp
+        parts: list[str] = []
+        for item in inp or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "text":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+        return "\n".join(parts)
+
+    def _kimi_loop_event(self, event: dict, ts: str) -> str | None:
+        sub = event.get("event") or {}
+        stype = sub.get("type")
+        if stype == "content.part":
+            part = sub.get("part") or {}
+            ptype = part.get("type")
+            if ptype == "think":
+                think = part.get("think")
+                if isinstance(think, str) and think:
+                    return f"[{ts}] [LEX reasoning]\n{think[:MAX_REASONING]}"
+                return None
+            if ptype == "text":
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    return f"[{ts}] [LEX]\n{text[:MAX_CONTENT]}"
+                return None
+            return None
+        if stype == "tool.call":
+            name = sub.get("name", "?")
+            return f"[{ts}] [TOOL → {name}] {self._compact_args(sub.get('args', {}))}"
+        # tool.result (tool output), step.begin/step.end (usage noise): excluded.
+        return None
 
     @staticmethod
     def _compact_args(args) -> str:

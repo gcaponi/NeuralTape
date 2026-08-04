@@ -132,20 +132,22 @@ def resolve_transcript(
         watcher = watcher_mod.TranscriptWatcher()
 
     assert watcher is not None
+    watcher_mod = _load_sibling("transcript_watcher")
+    session_id_of = watcher_mod.TranscriptWatcher.get_session_id
     candidates = watcher.find_all_transcripts(max_age_minutes=max_age_minutes)
     paths = [Path(path) for _, path in candidates]
-    exact = [path for path in paths if path.stem == session_ref]
+    exact = [path for path in paths if session_id_of(path) == session_ref]
     if len(exact) == 1:
         return exact[0]
 
-    matches = [path for path in paths if path.stem.startswith(session_ref)]
+    matches = [path for path in paths if session_id_of(path).startswith(session_ref)]
     if not matches:
         raise FileNotFoundError(
             f"no transcript matches session {session_ref!r} in the last "
             f"{max_age_minutes} minutes"
         )
     if len(matches) > 1:
-        choices = ", ".join(path.stem for path in matches[:5])
+        choices = ", ".join(session_id_of(path) for path in matches[:5])
         raise ValueError(
             f"ambiguous session prefix {session_ref!r}; matches: {choices}"
         )
@@ -192,7 +194,8 @@ def run_once(
 
     project = project_mod.ProjectResolver().resolve(project_root)
     storage = storage_mod.Storage(cfg.storage.db_path)
-    session_id = transcript_path.stem
+    watcher_mod = _load_sibling("transcript_watcher")
+    session_id = watcher_mod.TranscriptWatcher.get_session_id(transcript_path)
 
     # Growth-aware idempotency: a session is "already classified" only when an
     # existing marker is present AND the transcript has not grown beyond the
