@@ -102,6 +102,26 @@ def test_fallback_notify_after_interval():
     assert p.should_notify_fallback() is True
 
 
+def test_zero_budget_is_unlimited():
+    p, _ = _policy(calls=0, tokens=0)
+    for _ in range(5):
+        p.record_call(100_000)
+    ok, reason = p.can_call()
+    assert ok is True
+    assert reason == "ok"
+    s = p.status()
+    assert s["calls_today"] == 5
+    assert s["tokens_today"] == 500_000
+
+
+def test_unlimited_tokens_still_honors_call_cap():
+    p, _ = _policy(calls=1, tokens=0)
+    p.record_call(9_999_999)
+    ok, reason = p.can_call()
+    assert ok is False
+    assert "call limit" in reason
+
+
 def test_midnight_reset():
     """If date in state != today, counters reset."""
     p, d = _policy(calls=5, tokens=100)

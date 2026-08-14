@@ -260,6 +260,140 @@ def test_parser_reads_kimi_code_wire_without_harness_noise():
         }
 
 
+def _grok_events() -> list[dict]:
+    return [
+        {
+            "type": "system",
+            "content": "You are Grok 4.6 released by xAI. You are an interactive CLI tool.",
+        },
+        {
+            "type": "user",
+            "content": [{"type": "text", "text": "<user_info>\nWorkspace Path: /work/EterCervo\n</user_info>"}],
+        },
+        {
+            "type": "user",
+            "synthetic_reason": "system_reminder",
+            "content": [{"type": "text", "text": "<system-reminder>rumore harness</system-reminder>"}],
+        },
+        {
+            "type": "user",
+            "prompt_index": 0,
+            "content": [{"type": "text", "text": "<user_query>Sistema Neural Tape</user_query>"}],
+        },
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Prima leggo il watcher"}],
+            "encrypted_content": "opaque-do-not-ingest",
+        },
+        {
+            "type": "assistant",
+            "content": "Fix applicato",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "name": "list_dir",
+                    "arguments": '{"target_directory":"/work/EterCervo"}',
+                }
+            ],
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "content": "SEGRETO-DA-NON-INGERIRE",
+        },
+    ]
+
+
+def test_parser_reads_grok_chat_without_harness_or_tool_output():
+    with tempfile.TemporaryDirectory(prefix="nt-grok-parser-") as tmp:
+        transcript = Path(tmp) / "chat_history.jsonl"
+        _write_jsonl(transcript, _grok_events())
+
+        parser = TranscriptParser()
+        parsed = parser.parse_delta(transcript)
+        counts = parser.parse_delta_structured(transcript)
+
+        assert "source: grok-build" in parsed
+        assert "[USER]\n<user_query>Sistema Neural Tape</user_query>" in parsed
+        assert "[LEX reasoning]\nPrima leggo il watcher" in parsed
+        assert "[LEX]\nFix applicato" in parsed
+        assert "[TOOL → list_dir]" in parsed
+        assert "rumore harness" not in parsed
+        assert "SEGRETO-DA-NON-INGERIRE" not in parsed
+        assert "opaque-do-not-ingest" not in parsed
+        assert counts == {
+            "user": 2,
+            "assistant": 1,
+            "reasoning": 1,
+            "tool_calls": 0,
+            "total_events": 7,
+        }
+
+
+def test_watcher_discovers_grok_main_and_skips_subagents():
+    with tempfile.TemporaryDirectory(prefix="nt-watcher-grok-") as tmp:
+        home = Path(tmp)
+        ws = "%2Fwork%2FEterCervo"
+        main = (
+            home / ".grok" / "sessions" / ws / "019ff6c3-ad8e-71d3-bfaf-e65d78742ade"
+            / "chat_history.jsonl"
+        )
+        child = (
+            home / ".grok" / "sessions" / ws / "01a0008f-56f4-7833-bc6e-c8b5e9341f9a"
+            / "chat_history.jsonl"
+        )
+        _write_jsonl(main, _grok_events())
+        _write_jsonl(child, _grok_events())
+        (child.parent / "summary.json").write_text(
+            json.dumps({"parent_session_id": "019ff6c3-ad8e-71d3-bfaf-e65d78742ade"}),
+            encoding="utf-8",
+        )
+        (main.parent / "summary.json").write_text(
+            json.dumps({"session_summary": "NeuralTape Memory Insights"}),
+            encoding="utf-8",
+        )
+
+        watcher = TranscriptWatcher(home=home)
+        found = {path for _, path in watcher.find_all_transcripts(max_age_minutes=60)}
+
+        assert main.resolve() in found
+        assert child.resolve() not in found
+        assert watcher.get_workspace_label(main) == "EterCervo"
+        assert (
+            TranscriptWatcher.get_session_id(main)
+            == "019ff6c3-ad8e-71d3-bfaf-e65d78742ade"
+        )
+
+
+def test_watcher_skips_codex_subagent_rollouts():
+    with tempfile.TemporaryDirectory(prefix="nt-watcher-codex-sub-") as tmp:
+        home = Path(tmp)
+        main = home / ".codex" / "sessions" / "2026" / "08" / "14" / "rollout-main.jsonl"
+        sub = home / ".codex" / "sessions" / "2026" / "08" / "14" / "rollout-sub.jsonl"
+        _write_jsonl(
+            main,
+            [{"type": "session_meta", "payload": {"cwd": "/work/EterCervo", "source": "cli"}}],
+        )
+        _write_jsonl(
+            sub,
+            [{
+                "type": "session_meta",
+                "payload": {
+                    "cwd": "/work/EterCervo",
+                    "forked_from_id": "abc",
+                    "agent_nickname": "Boyle",
+                    "source": {"subagent": {"thread_spawn": {}}},
+                },
+            }],
+        )
+
+        watcher = TranscriptWatcher(home=home)
+        found = {path for _, path in watcher.find_all_transcripts(max_age_minutes=60)}
+
+        assert main.resolve() in found
+        assert sub.resolve() not in found
+
+
 def test_watcher_discovers_kimi_main_wire_and_derives_ids():
     with tempfile.TemporaryDirectory(prefix="nt-watcher-kimi-") as tmp:
         home = Path(tmp)

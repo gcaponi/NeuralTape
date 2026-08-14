@@ -1,7 +1,7 @@
 """cost — cost & fallback policy for LLM calls (D0.5).
 
-DeepSeek is paid. Without a budget guard, a runaway classifier loop (e.g. cron
-stuck retrying) could burn quota. This module enforces:
+DeepSeek is paid. A budget of 0 means unlimited (still recorded for status).
+When a positive cap is set, this module enforces:
     1. Daily call/token caps. Once hit, can_call() returns (False, reason) without
        touching the network.
     2. State persists across runs in tape/v3/.state/cost-state.json (resets at
@@ -23,8 +23,8 @@ log = logging.getLogger("neural-tape-v3")
 
 @dataclass
 class CostBudget:
-    daily_limit_calls: int
-    daily_limit_tokens: int
+    daily_limit_calls: int  # 0 = unlimited
+    daily_limit_tokens: int  # 0 = unlimited
 
 
 class CostPolicy:
@@ -49,9 +49,9 @@ class CostPolicy:
             state = self._fresh_state(today)
             self._save(state)
 
-        if state["calls"] >= self.budget.daily_limit_calls:
+        if self.budget.daily_limit_calls > 0 and state["calls"] >= self.budget.daily_limit_calls:
             return (False, f"daily call limit reached ({state['calls']}/{self.budget.daily_limit_calls})")
-        if state["tokens"] >= self.budget.daily_limit_tokens:
+        if self.budget.daily_limit_tokens > 0 and state["tokens"] >= self.budget.daily_limit_tokens:
             return (False, f"daily token limit reached ({state['tokens']}/{self.budget.daily_limit_tokens})")
         return (True, "ok")
 

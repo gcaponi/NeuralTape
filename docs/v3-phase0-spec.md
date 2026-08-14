@@ -288,8 +288,8 @@ class CostPolicy:
 ```
 
 **Default budget** (da config):
-- `daily_limit_calls: 100`
-- `daily_limit_tokens: 200000`
+- `daily_limit_calls: 0` (0 = unlimited; positive integers re-enable the cap)
+- `daily_limit_tokens: 0`
 
 **Stato persistente:** `tape/v3/.state/cost-state.json` con `{date, calls, tokens}`. Reset a mezzanotte locale.
 

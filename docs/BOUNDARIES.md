@@ -8,7 +8,7 @@
 
 | Dimension | Neural Tape v3 | `_Lex/memory.md` |
 |---|---|---|
-| Source | VS Code Copilot transcript JSONL | Curated operational memory |
+| Source | Copilot / Codex / Kimi Code / Grok Build JSONL | Curated operational memory |
 | Author | Automated v3 pipeline (classifier + layered memory) | Lex, manually via `tools/lex-capture.py` |
 | Input | `user.message`, `assistant.message`, `reasoningText`, tool events, git signals | High-value patterns, decisions, warnings, preferences |
 | Curation | LLM classifier, layered episodes (working/episodic/semantic) + confidence | `Recent Context` + category sections |
@@ -51,8 +51,8 @@ journalctl --user -u neural-tape-v3.service -n 40 --no-pager
 ## Operational Flow
 
 ```text
-VS Code Chat session
-    -> Copilot JSONL or Codex rollout JSONL on disk
+Lex session (Copilot / Codex / Kimi Code / Grok Build)
+    -> transcript JSONL on disk
     -> neural-tape-v3.timer every 5 minutes (run-cron-v3.sh)
     -> idle/growth detection (skip already-classified, unchanged transcripts)
     -> v3 classifier extracts layered insights (working/episodic/semantic + confidence)
@@ -64,6 +64,7 @@ VS Code Chat session
 
 ## Changelog
 
+- 2026-08-14: DeepSeek daily cap is 0 (unlimited). Watcher adds Grok Build `chat_history.jsonl` and skips Codex/Grok subagent transcripts.
 - 2026-07-21 v3.0: v3 is the active pipeline. `_Lex/memory.md` becomes manual curated memory only; automatic insights live in SQLite + `tape/archive/` mirror. Verification moves to `journalctl --user -u neural-tape-v3.service`.
 - 2026-07-08 v2.2: Switched from CLI-log staging/review to automatic VS Code transcript classification.
 - 2026-06-07 v1.0: Initial Neural Tape / Lex Memory boundary.

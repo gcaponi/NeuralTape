@@ -39,7 +39,8 @@ if str(THIS_DIR) not in sys.path:
 log = logging.getLogger("neural-tape-v3")
 
 CLASSIFIED_EVENT = "transcript.classified"
-RUN_ONCE_MAX_CHARS = 30000
+# Enough for MAX_CHUNKS classifier windows (6 x 30k). Older tail is dropped.
+RUN_ONCE_MAX_CHARS = 180000
 
 # Minimum byte growth required before reprocessing an already-classified session.
 # Below this threshold the session is considered stable (closed or idle) and
@@ -384,7 +385,9 @@ def selfcheck() -> int:
     cfg = config_mod.load(TAPE_ROOT)
     print(f"[1/10] config loaded - enabled={cfg.enabled}")
     print(f"       storage.db_path = {cfg.storage.db_path}")
-    print(f"       cost limits     = {cfg.cost.daily_limit_calls} calls / {cfg.cost.daily_limit_tokens} tokens")
+    calls = cfg.cost.daily_limit_calls or "unlimited"
+    tokens = cfg.cost.daily_limit_tokens or "unlimited"
+    print(f"       cost limits     = {calls} calls / {tokens} tokens")
 
     # 2. Storage init
     storage = storage_mod.Storage(cfg.storage.db_path)
@@ -483,7 +486,9 @@ def status() -> int:
     cfg = config_mod.load(TAPE_ROOT)
     print(f"v3 enabled          : {cfg.enabled}")
     print(f"v3 db               : {cfg.storage.db_path}")
-    print(f"cost daily limits   : {cfg.cost.daily_limit_calls} calls / {cfg.cost.daily_limit_tokens} tokens")
+    calls = cfg.cost.daily_limit_calls or "unlimited"
+    tokens = cfg.cost.daily_limit_tokens or "unlimited"
+    print(f"cost daily limits   : {calls} calls / {tokens} tokens")
     print(f"events sources      : {cfg.events.enabled_sources}")
     print(f"redaction extras    : {len(cfg.redaction.extra_patterns)}")
     return 0

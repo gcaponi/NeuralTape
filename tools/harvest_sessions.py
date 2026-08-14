@@ -185,7 +185,7 @@ def main() -> int:
     ap.add_argument(
         "--glob",
         default=DEFAULT_TRANSCRIPTS_GLOB,
-        help="optional transcript glob; default discovers VS Code Copilot and Codex stores",
+        help="optional transcript glob; default discovers Copilot, Codex, Kimi and Grok stores",
     )
     ap.add_argument("--min-bytes", type=int, default=50_000,
                     help="skip tiny transcripts (default: 50KB)")

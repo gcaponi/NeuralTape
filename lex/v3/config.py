@@ -24,8 +24,8 @@ DEFAULTS = {
     "enabled": False,
     "storage": {"db_path": "tape/v3/neuraltape.db"},
     "cost": {
-        "daily_limit_calls": 100,
-        "daily_limit_tokens": 200000,
+        "daily_limit_calls": 0,
+        "daily_limit_tokens": 0,
         "fallback_notify_interval_hours": 24,
     },
     "events": {"enabled_sources": ["transcript", "git.commit"]},
@@ -47,9 +47,18 @@ class StorageConfig:
 
 @dataclass
 class CostConfig:
-    daily_limit_calls: int
-    daily_limit_tokens: int
+    daily_limit_calls: int  # 0 = unlimited
+    daily_limit_tokens: int  # 0 = unlimited
     fallback_notify_interval_hours: int
+
+
+def _limit(value) -> int:
+    """Parse a daily cap. 0 / None / 'unlimited' means no cap."""
+    if value is None or value == "":
+        return 0
+    if isinstance(value, str) and value.strip().lower() in ("unlimited", "none", "inf", "infinite"):
+        return 0
+    return max(0, int(value))
 
 @dataclass
 class EventsConfig:
@@ -136,8 +145,8 @@ def load(tape_root: Path, config_path: Path | None = None) -> V3Config:
             db_path=_resolve_path(merged["storage"]["db_path"], tape_root),
         ),
         cost=CostConfig(
-            daily_limit_calls=int(merged["cost"]["daily_limit_calls"]),
-            daily_limit_tokens=int(merged["cost"]["daily_limit_tokens"]),
+            daily_limit_calls=_limit(merged["cost"]["daily_limit_calls"]),
+            daily_limit_tokens=_limit(merged["cost"]["daily_limit_tokens"]),
             fallback_notify_interval_hours=int(merged["cost"]["fallback_notify_interval_hours"]),
         ),
         events=EventsConfig(

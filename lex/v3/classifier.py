@@ -45,6 +45,8 @@ log = logging.getLogger("neural-tape-v3")
 
 # Max characters for the transcript sent to LLM (matches v2.2).
 MAX_TRANSCRIPT_CHARS = 30000
+# Newest-first bound so a 1MB session cannot fan out into dozens of LLM calls.
+MAX_CHUNKS = 6
 
 # The prompt template. {redacted_summary} is filled with the redaction summary
 # (or empty if clean). {transcript} is the actual content.
@@ -223,7 +225,7 @@ class ClassifierV3:
             raise ClassificationDeferred(f"LLM call skipped: {reason}")
 
         # 3. Classify
-        chunks = list(reversed(self._split(redacted)))
+        chunks = list(reversed(self._split(redacted)))[:MAX_CHUNKS]
         valid: list[ClassifierInsight] = []
         seen_titles: set[str] = set()
 

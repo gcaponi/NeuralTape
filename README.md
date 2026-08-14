@@ -1,8 +1,8 @@
 # Neural Tape
 
-Automatic memory layer for VS Code Copilot sessions.
+Automatic memory layer for Lex sessions.
 
-Neural Tape reads the JSONL transcripts written by VS Code GitHub Copilot and Codex, waits until the session becomes idle, classifies the useful long-term insights with an OpenAI-compatible LLM, then persists them as layered episodes in SQLite (`tape/v3/neuraltape.db`) with a markdown mirror in `tape/archive/`. `_Lex/memory.md` is manual curated memory only (Lex writes it via `tools/lex-capture.py` in EterCervo).
+Neural Tape reads the JSONL transcripts written by VS Code GitHub Copilot, Codex, Kimi Code and Grok Build, waits until the session becomes idle, classifies the useful long-term insights with an OpenAI-compatible LLM, then persists them as layered episodes in SQLite (`tape/v3/neuraltape.db`) with a markdown mirror in `tape/archive/`. `_Lex/memory.md` is manual curated memory only (Lex writes it via `tools/lex-capture.py` in EterCervo).
 
 ## Version status
 
@@ -30,7 +30,7 @@ Previous versions watched assistant-specific CLI logs from Kimi Code, OpenCode, 
 The flow is fully automatic:
 
 ```text
-Copilot/Codex transcript -> 5-minute user timer -> idle detection -> DeepSeek classifier -> SQLite + tape/archive
+Copilot/Codex/Kimi/Grok transcript -> 5-minute user timer -> idle detection -> DeepSeek classifier -> SQLite + tape/archive
 ```
 
 ## Live components (v3, active since 2026-07-20)
@@ -39,8 +39,8 @@ Copilot/Codex transcript -> 5-minute user timer -> idle detection -> DeepSeek cl
 lex/pre_load.py             Startup context generator (reads tape/archive + _Lex/memory.md)
 lex/v3/run.py               One-shot orchestrator (selfcheck, status, run_once)
 lex/v3/run-cron-v3.sh       systemd/cron-safe wrapper invoked by neural-tape-v3.timer
-lex/v3/transcript_watcher.py Discovers Copilot and Codex JSONL stores
-lex/v3/transcript_parser.py  Normalizes both schemas without system/tool-output ingestion
+lex/v3/transcript_watcher.py Discovers Copilot, Codex, Kimi Code and Grok Build JSONL stores
+lex/v3/transcript_parser.py  Normalizes those schemas without system/tool-output ingestion
 lex/v3/classifier.py        LLM classifier: layered insights (working/episodic/semantic) + confidence
 lex/v3/storage.py           SQLite persistence (tape/v3/neuraltape.db)
 lex/v3/markdown_export.py   Mirrors each episode to tape/archive/<category>/

@@ -26,8 +26,9 @@ v3:
   storage:
     db_path: "tape/v3/neuraltape.db"
   cost:
-    daily_limit_calls: 100
-    daily_limit_tokens: 200000
+    # 0 = unlimited. Positive integers re-enable the daily cap.
+    daily_limit_calls: 0
+    daily_limit_tokens: 0
     fallback_notify_interval_hours: 24
   events:
     enabled_sources: ["transcript", "git.commit"]

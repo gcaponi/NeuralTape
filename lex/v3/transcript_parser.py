@@ -1,9 +1,11 @@
 """Parse supported assistant transcripts into classifier-friendly text.
 
-Neural Tape v3 accepts three JSONL schemas: the legacy VS Code GitHub Copilot
-schema, the Codex rollout schema stored under ``~/.codex/sessions``, and the
+Neural Tape v3 accepts four JSONL schemas: the legacy VS Code GitHub Copilot
+schema, the Codex rollout schema stored under ``~/.codex/sessions``, the
 Kimi Code wire schema (protocol 1.5) stored under
-``~/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl``.  Only user,
+``~/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl``, and the
+Grok Build schema stored under
+``~/.grok/sessions/<urlencoded-cwd>/<uuid>/chat_history.jsonl``.  Only user,
 assistant, reasoning-summary, and tool-call data is retained; system/developer
 instructions, harness reminders and tool outputs are intentionally excluded.
 """
@@ -73,6 +75,15 @@ class TranscriptParser:
         if etype in ("tool.execution_start", "tool.execution_complete"):
             return "tool_calls"
 
+        if etype == "user" and not event.get("synthetic_reason"):
+            return "user" if self._grok_text(event) else None
+        if etype == "assistant" and self._grok_text(event):
+            return "assistant"
+        if etype == "reasoning" and self._grok_reasoning(event):
+            return "reasoning"
+        if etype == "assistant" and event.get("tool_calls"):
+            return "tool_calls"
+
         if etype == "turn.prompt":
             return "user" if self._kimi_prompt_text(event) else None
         if etype == "context.append_loop_event":
@@ -119,6 +130,19 @@ class TranscriptParser:
         # Kimi Code wire schema (protocol 1.5). ``context.append_message``
         # user entries carry harness-injected reminders, not the user voice:
         # they are excluded on purpose; real prompts arrive via ``turn.prompt``.
+        if etype == "system" and self._is_grok_event(event):
+            return self._grok_session(event, ts)
+        if etype == "user" and self._is_grok_event(event):
+            if event.get("synthetic_reason"):
+                return None
+            text = self._grok_text(event)
+            return f"[{ts}] [USER]\n{text[:MAX_CONTENT]}" if text else None
+        if etype == "reasoning" and self._is_grok_event(event):
+            reasoning = self._grok_reasoning(event)
+            return f"[{ts}] [LEX reasoning]\n{reasoning[:MAX_REASONING]}" if reasoning else None
+        if etype == "assistant" and self._is_grok_event(event):
+            return self._grok_assistant(event, ts)
+
         if etype == "metadata":
             return self._kimi_session(event, ts)
         if etype == "turn.prompt":
@@ -289,6 +313,62 @@ class TranscriptParser:
             return f"[{ts}] [TOOL → {name}] {self._compact_args(sub.get('args', {}))}"
         # tool.result (tool output), step.begin/step.end (usage noise): excluded.
         return None
+
+    # ---- Grok Build (chat_history.jsonl) --------------------------------
+
+    @staticmethod
+    def _is_grok_event(event: dict) -> bool:
+        return event.get("type") in ("system", "user", "assistant", "reasoning", "tool_result")
+
+    @staticmethod
+    def _grok_session(event: dict, ts: str) -> str:
+        parts = [f"[{ts}] [SESSION START]", "source: grok-build"]
+        content = event.get("content")
+        if isinstance(content, str) and "Grok" in content[:80]:
+            parts.append("model: grok")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _grok_text(event: dict) -> str:
+        content = event.get("content")
+        if isinstance(content, str):
+            return content
+        parts: list[str] = []
+        for item in content or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") not in ("text", "input_text", "output_text"):
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _grok_reasoning(event: dict) -> str:
+        parts: list[str] = []
+        for item in event.get("summary") or []:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+            elif isinstance(item, str) and item:
+                parts.append(item)
+        return "\n".join(parts)
+
+    def _grok_assistant(self, event: dict, ts: str) -> str | None:
+        parts: list[str] = []
+        text = self._grok_text(event)
+        if text:
+            parts.append(f"[{ts}] [LEX]\n{text[:MAX_CONTENT]}")
+        for call in event.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            name = call.get("name", "?")
+            parts.append(
+                f"[{ts}] [TOOL → {name}] {self._compact_args(call.get('arguments', {}))}"
+            )
+        return "\n".join(parts) if parts else None
 
     @staticmethod
     def _compact_args(args) -> str:

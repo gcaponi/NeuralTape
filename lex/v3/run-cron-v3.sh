@@ -27,9 +27,9 @@ tape_root = Path.cwd()
 
 # Tunables — kept conservative to bound LLM cost per cron tick.
 MAX_AGE_DAYS = 7           # only consider transcripts touched in the last week
-MIN_BYTES = 5120           # skip tiny transcripts (<5KB, likely session stub)
+MIN_BYTES = 20000          # skip stubs (Grok system-only chats sit around 14KB)
 ACTIVE_THRESHOLD_SEC = 600 # skip transcripts modified in the last 10 min (active session)
-MAX_RUNS_PER_TICK = 3      # hard cap on LLM calls per cron invocation
+MAX_RUNS_PER_TICK = 8      # sessions classified per tick (budget is unlimited)
 
 # Resolve project PER transcript via harvest_sessions heuristic.
 # Each transcript may belong to a different project (workspace folder), so we
